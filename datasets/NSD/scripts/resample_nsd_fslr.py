@@ -54,10 +54,10 @@ def main(path: str | Path, overwrite: bool = False, out_dir: Path | None = None)
     #     natural-scenes-dataset/nsddata_timeseries/ppdata/subj01/func1mm/timeseries/timeseries_session01_run01.nii.gz
     #     natural-scenes-dataset/nsddata_betas/ppdata/subj01/func1mm/betas_fithrf/betas_session30.nii.gz
     nsd_dir = path.parents[5]
-    subid = int(path.parents[2].name[-2:])
-    func_res = path.parents[1].name
+    subid = int(path.parts[-4][-2:])  # subj01 -> 1
+    func_res = path.parts[-3]  # func1mm
     assert func_res == "func1mm", "Only func1mm data supported"
-    sourcespace = {"func1mm": "func1pt0", "func1pt8mm": "func1pt8"}[func_res]
+    sourcespace = "func1pt0"
 
     # Prepare output base path.
     out_dir = nsd_dir if out_dir is None else Path(out_dir)
