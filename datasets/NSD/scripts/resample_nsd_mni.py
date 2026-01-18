@@ -9,7 +9,8 @@ from pathlib import Path
 
 import nibabel as nib
 import numpy as np
-from cloudpathlib import AnyPath, CloudPath
+from cloudpathlib import AnyPath, CloudPath, S3Path, S3Client
+from boto3.s3.transfer import TransferConfig
 from nilearn.image import resample_img
 from nsdcode import NSDmapdata
 from tqdm import tqdm
@@ -31,24 +32,11 @@ ROOT = Path(__file__).parents[1]
 
 BATCH_SIZE = 16
 
-# NSD MNI 1mm output affine
-# From official template: s3://natural-scenes-dataset/nsddata/templates/MNI152_T1_1mm.nii.gz
-# Orientation: LAS (Left-Anterior-Superior)
-NSD_MNI_1MM_SHAPE = (182, 218, 182)
-NSD_MNI_1MM_AFFINE = np.array(
-    [
-        [-1.0, 0.0, 0.0, 90.0],
-        [0.0, 1.0, 0.0, -126.0],
-        [0.0, 0.0, 1.0, -72.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ]
-)
-
-# Target MNI152 FSL 2mm (LAS for consistency)
+# Target MNI152 2mm RAS.
 MNI152_2MM_SHAPE = (91, 109, 91)
 MNI152_2MM_AFFINE = np.array(
     [
-        [-2.0, 0.0, 0.0, 90.0],
+        [2.0, 0.0, 0.0, -90.0],
         [0.0, 2.0, 0.0, -126.0],
         [0.0, 0.0, 2.0, -72.0],
         [0.0, 0.0, 0.0, 1.0],
@@ -68,7 +56,7 @@ def main(
     # Example paths:
     #     natural-scenes-dataset/nsddata_timeseries/ppdata/subj01/func1mm/timeseries/timeseries_session01_run01.nii.gz
     #     natural-scenes-dataset/nsddata_betas/ppdata/subj01/func1mm/betas_fithrf/betas_session30.nii.gz
-    #     s3://bucket/nsddata_timeseries/ppdata/subj01/func1mm/timeseries/timeseries_session01_run01.nii.gz
+    #     s3://natural-scenes-dataset/nsddata_timeseries/ppdata/subj01/func1mm/timeseries/timeseries_session01_run01.nii.gz
     subid = int(path.parts[-4][-2:])  # subj01 -> 1
     func_res = path.parts[-3]  # func1mm
     assert func_res == "func1mm", "Only func1mm data supported"
@@ -84,12 +72,20 @@ def main(
     # Prepare output path.
     out_dir = AnyPath(out_dir) if out_dir else path.parents[5]
     out_base = path.relative_to(path.parents[5])
-    out_base = out_base.replace(func_res, "MNI152NLin6Asym_res-2")
+    out_base = str(out_base).replace(func_res, "MNI152")
     out_path = AnyPath(out_dir / out_base)
+
+    download_client, upload_client = get_s3_client()
+    if isinstance(path, CloudPath):
+        path = S3Path(path, client=download_client)
+    if isinstance(out_path, CloudPath):
+        out_path = S3Path(out_path, client=upload_client)
 
     if out_path.exists() and not overwrite:
         _logger.info("Output %s exists; skipping.", out_path)
         return
+
+    _logger.info("Processing: %s", out_path)
 
     # Download input if remote, process, and upload output if remote.
     with tempfile.TemporaryDirectory(prefix="nsd-") as tmpdir:
@@ -185,23 +181,32 @@ def suppress_print():
         devnull.close()
 
 
+def get_s3_client():
+    config = TransferConfig(
+        multipart_threshold=8 * 1024 * 1024,
+        multipart_chunksize=8 * 1024 * 1024,
+        max_concurrency=10,
+        use_threads=True,
+    )
+    download_client = S3Client(boto3_transfer_config=config, no_sign_request=True)
+
+    if "R2_ACCESS_KEY_ID" in os.environ:
+        upload_client = S3Client(
+            aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+            endpoint_url=os.environ["R2_ENDPOINT_URL_S3"],
+            boto3_transfer_config=config,
+        )
+    else:
+        upload_client = download_client
+    return download_client, upload_client
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Resample NSD func1mm data to MNI152NLin6Asym 2mm space."
-    )
-    parser.add_argument("path", type=str, help="Input path (local or s3://)")
-    parser.add_argument(
-        "--nsd-dir",
-        type=str,
-        default=None,
-        help="Local NSD directory containing transforms (required for S3 input)",
-    )
-    parser.add_argument(
-        "--out-dir",
-        type=str,
-        default=None,
-        help="Output directory (local or s3://). Defaults to same root as input.",
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("path", type=str)
+    parser.add_argument("--out-dir", type=str, default=None)
+    parser.add_argument("--nsd-dir", type=str, default=None)
     parser.add_argument("--overwrite", "-x", action="store_true", default=False)
     args = parser.parse_args()
     main(**vars(args))
