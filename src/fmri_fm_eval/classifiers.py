@@ -39,13 +39,18 @@ class ClassifierGrid(nn.Module):
 
 
 class LinearClassifier(nn.Module):
-    def __init__(self, in_dim, out_dim):
+    def __init__(self, in_dim, out_dim, norm: bool = False, xavier_init: bool = False):
         super().__init__()
+        self.xavier_init = xavier_init
+        self.norm = nn.BatchNorm1d(in_dim) if norm else None
         self.linear = nn.Linear(in_dim, out_dim)
         self.init_weights()
 
     def init_weights(self):
-        nn.init.trunc_normal_(self.linear.weight, std=0.02)
+        if self.xavier_init:
+            nn.init.xavier_uniform_(self.linear.weight)
+        else:
+            nn.init.trunc_normal_(self.linear.weight, std=0.02)
         nn.init.zeros_(self.linear.bias)
 
     def forward(self, x: Tensor):
