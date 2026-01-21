@@ -185,8 +185,9 @@ def main(args: DictConfig):
         args.steps_per_epoch = len(train_loader) // args.accum_iter
     total_steps = args.epochs * args.steps_per_epoch
     warmup_steps = args.warmup_epochs * args.steps_per_epoch
-    lr_schedule = make_lr_schedule(args.lr, total_steps, warmup_steps)
-    print(f"full schedule: epochs = {args.epochs} (steps = {total_steps})")
+    no_decay = args.get("no_decay", False)
+    lr_schedule = make_lr_schedule(args.lr, total_steps, warmup_steps, no_decay=no_decay)
+    print(f"full schedule: epochs = {args.epochs} (steps = {total_steps}) (decay = {not no_decay})")
     print(f"warmup: epochs = {args.warmup_epochs} (steps = {warmup_steps})")
 
     # load checkpoint/resume training
@@ -417,10 +418,14 @@ def make_classifiers(args: DictConfig, embed_dim: int):
     return all_classifiers, param_groups
 
 
-def make_lr_schedule(base_lr: float, total_steps: int, warmup_steps: int):
+def make_lr_schedule(base_lr: float, total_steps: int, warmup_steps: int, no_decay: bool = False):
     warmup = np.linspace(0.0, 1.0, warmup_steps)
-    decay = np.cos(np.linspace(0, np.pi, max(total_steps - warmup_steps, 0)))
-    decay = (decay + 1) / 2
+    decay_steps = max(total_steps - warmup_steps, 0)
+    if not no_decay:
+        decay = np.cos(np.linspace(0, np.pi, decay_steps))
+        decay = (decay + 1) / 2
+    else:
+        decay = np.ones(decay_steps)
     lr_schedule = base_lr * np.concatenate([warmup, decay])
     lr_schedule = lr_schedule[:total_steps]
     return lr_schedule

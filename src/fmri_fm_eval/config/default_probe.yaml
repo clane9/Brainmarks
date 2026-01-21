@@ -45,8 +45,9 @@ accum_iter: 1
 # absolute_lr = base_lr * total_batch_size / 256
 base_lr: 1e-3
 # lower lr bound for cyclic schedulers that hit 0
-min_lr: 0.0
 warmup_epochs: 2
+no_decay: false
+
 weight_decay: 0.05
 clip_grad: 1.0
 

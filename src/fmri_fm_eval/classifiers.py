@@ -42,7 +42,7 @@ class LinearClassifier(nn.Module):
     def __init__(self, in_dim, out_dim, norm: bool = False, xavier_init: bool = False):
         super().__init__()
         self.xavier_init = xavier_init
-        self.norm = nn.BatchNorm1d(in_dim) if norm else None
+        self.norm = nn.BatchNorm1d(in_dim, affine=False) if norm else None
         self.linear = nn.Linear(in_dim, out_dim)
         self.init_weights()
 
