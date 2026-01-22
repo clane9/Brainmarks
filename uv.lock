@@ -1164,7 +1164,7 @@ requires-dist = [
     { name = "s3fs" },
     { name = "scikit-learn" },
     { name = "seaborn" },
-    { name = "swiftfmri", marker = "extra == 'swift'", git = "https://github.com/MedARC-AI/SwiFT.git?rev=934e27a892921756109feb577851615e4e8faeb6" },
+    { name = "swiftfmri", marker = "extra == 'swift'", git = "https://github.com/MedARC-AI/SwiFT.git?rev=324b003061e484ebd1a247967b520019fda911fc" },
     { name = "tabulate" },
     { name = "templateflow" },
     { name = "torch" },
@@ -2978,35 +2978,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/4f/62/0507203429e64eac26509c48518e8f6f3997a9480efa9176166f714a049c/neptune-1.14.0.tar.gz", hash = "sha256:041396cbd24d5af0e0887f1fa6da0367837c55f1032bb7ff5d8ec010fd75fac1", size = 260645, upload-time = "2025-04-15T07:28:34.617Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/67/71/51f3392fc1ac96ef7e98295dc23fda960b71c9675d534963f9ed91174ffb/neptune-1.14.0-py3-none-any.whl", hash = "sha256:09485726e5de481871cd0d0763bba96503f00ec1a4ee24509c308f903f036937", size = 487891, upload-time = "2025-04-15T07:28:32.442Z" },
-]
-
-[[package]]
-name = "neptune-client"
-version = "1.14.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "boto3" },
-    { name = "bravado" },
-    { name = "click" },
-    { name = "future" },
-    { name = "gitpython" },
-    { name = "oauthlib" },
-    { name = "packaging" },
-    { name = "pandas" },
-    { name = "pillow" },
-    { name = "psutil" },
-    { name = "pyjwt" },
-    { name = "requests" },
-    { name = "requests-oauthlib" },
-    { name = "six" },
-    { name = "swagger-spec-validator" },
-    { name = "typing-extensions" },
-    { name = "urllib3" },
-    { name = "websocket-client" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/8b/01/ce953d10cdef909ad45439da15d57f3315312d9c81d6e2c8658f29671cfe/neptune_client-1.14.0.tar.gz", hash = "sha256:7ae06b072cc5dd8d9ad5df7d9d128b4759a47da8ff7bbcfcf1453e01ee1b8fb2", size = 259021, upload-time = "2025-04-15T07:28:50.064Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c9/36/7bc4085f63d57e250646e8c4720a6ed152a8e1432eeddc6a46704be9b827/neptune_client-1.14.0-py3-none-any.whl", hash = "sha256:40909e1d269926fa4d957b41729d20012a699b32005f4ae09df4f8030a07cf3e", size = 487967, upload-time = "2025-04-15T07:28:48.266Z" },
 ]
 
 [[package]]
@@ -5244,11 +5215,11 @@ wheels = [
 [[package]]
 name = "swiftfmri"
 version = "0.1.0"
-source = { git = "https://github.com/MedARC-AI/SwiFT.git?rev=934e27a892921756109feb577851615e4e8faeb6#934e27a892921756109feb577851615e4e8faeb6" }
+source = { git = "https://github.com/MedARC-AI/SwiFT.git?rev=324b003061e484ebd1a247967b520019fda911fc#324b003061e484ebd1a247967b520019fda911fc" }
 dependencies = [
     { name = "einops" },
     { name = "monai" },
-    { name = "neptune-client" },
+    { name = "neptune" },
     { name = "nibabel" },
     { name = "nilearn" },
     { name = "numpy" },
