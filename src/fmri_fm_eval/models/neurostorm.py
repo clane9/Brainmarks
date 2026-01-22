@@ -92,6 +92,7 @@ class NeuroStormWrapper(nn.Module):
         self.backbone = model.model
         self.monkey_patch_forward_encoder()
         self.expected_seq_len = 20
+        self.max_windows = 8
 
     def monkey_patch_forward_encoder(self):
         def forward_encoder(self, x, apply_mask: bool = True):
@@ -115,7 +116,7 @@ class NeuroStormWrapper(nn.Module):
         B, C, H, W, D, T = x.shape
 
         # handle sliding windows
-        num_windows = T // self.expected_seq_len
+        num_windows = min(T // self.expected_seq_len, self.max_windows)
         T = num_windows * self.expected_seq_len
         x = rearrange(x[..., :T], "b c x y z (w t) -> (b w) c x y z t", w=num_windows)
 
