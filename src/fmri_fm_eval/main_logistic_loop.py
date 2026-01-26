@@ -94,9 +94,19 @@ def main(args: DictConfig):
     all_features = np.concatenate(list(features_dict.values()))
     all_targets = np.concatenate(list(targets_dict.values()))
 
-    random_state = sklearn.utils.check_random_state(args.seed)
-    table = []
-    for trial_id in range(args.n_trials):
+    train_log = output_dir / "train_log.json"
+    if train_log.exists():
+        with train_log.open() as f:
+            table = [json.loads(line.strip()) for line in f.readlines()]
+        start_trial = table[-1]["trial_id"] + 1
+        print(f"resuming from trial {start_trial}")
+    else:
+        table = []
+        start_trial = 0
+        print(f"starting from trial {start_trial}")
+
+    for trial_id in range(start_trial, args.n_trials):
+        random_state = sklearn.utils.check_random_state(args.seed + trial_id)
         X_train, X_test, y_train, y_test = train_test_split(
             all_features,
             all_targets,
@@ -133,7 +143,7 @@ def main(args: DictConfig):
         table.append(record)
 
         print(json.dumps(record))
-        with (output_dir / "train_log.json").open("a") as f:
+        with train_log.open("a") as f:
             print(json.dumps(record), file=f)
 
     table = pd.DataFrame.from_records(table)
