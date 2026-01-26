@@ -1,0 +1,3 @@
+batch_size: 2
+prefetch_factor: null
+wandb: false
