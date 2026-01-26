@@ -30,6 +30,7 @@ dependencies = [
     "s3fs",
     "scikit-learn",
     "seaborn",
+    "setuptools<67",
     "tabulate",
     "templateflow",
     "torch",
