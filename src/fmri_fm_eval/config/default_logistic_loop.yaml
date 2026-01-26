@@ -1,0 +1,32 @@
+# Root output directory
+# Individual eval runs will be saved as:
+#
+#   output_root/{name_prefix}/{dataset}__{model}__{representation}__{classifier}
+output_root: output
+name_prefix: eval_logistic_loop
+
+n_trials: 100
+
+# Description of the run. Goes in wandb notes.
+notes: null
+
+# Model and dataset extra kwargs
+model_kwargs: {}
+dataset_kwargs: {}
+
+# Data loader
+num_workers: 8
+batch_size: 64
+
+# LogisticRegressionCV settings
+cv_folds: 5
+max_iter: 1000
+Cs: 10  # number of regularization values to try (log-spaced)
+# use class_weight='balanced' for imbalanced classes
+
+amp: true
+
+device: cuda
+
+seed: 4466
+debug: false
