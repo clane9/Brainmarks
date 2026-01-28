@@ -39,7 +39,9 @@ logs
 upload
 notebooks
 tmp
-experiments
+slurms
+experiments/tuning_v1
+experiments/260115
 
 # HCP-YA
 hcpya_restricted.csv
