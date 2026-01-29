@@ -1,5 +1,3 @@
-# fMRI Foundation Model Evaluation Suite
-
 A unified framework for evaluating pre-trained fMRI foundation models across diverse neuroimaging datasets and prediction tasks.
 
 ## Structure
