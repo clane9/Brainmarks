@@ -1,5 +1,7 @@
 import os
 
+import numpy as np
+import torch
 
 from fmri_fm_eval.datasets.base import HFDataset, load_arrow_dataset
 from fmri_fm_eval.datasets.registry import register_dataset
@@ -76,3 +78,32 @@ def hcpya_rest1lr_pmat24(space: str, **kwargs):
 @register_dataset
 def hcpya_task21(space: str, **kwargs):
     return _create_hcpya("task21", space, target_key="cond_id", **kwargs)
+
+
+@register_dataset
+def hcpya_clips_aot(space: str, seed: int = 42, **kwargs):
+    dataset_dict = {}
+    splits = ["train", "validation", "test"]
+    rng = np.random.default_rng(seed)
+    for split in splits:
+        url = f"{HCPYA_ROOT}/hcpya-clips.{space}.arrow/{split}"
+        dataset = load_arrow_dataset(url)
+
+        N = len(dataset)
+        targets = np.concatenate([np.zeros(N // 2), np.ones(N - N // 2)]).astype(np.int32)
+        rng.shuffle(targets)
+
+        dataset = HFDataset(dataset, targets=targets, transform=_reverse_transform)
+        dataset_dict[split] = dataset
+
+    return dataset_dict
+
+
+def _reverse_transform(sample):
+    bold = sample["bold"]
+    target = sample["target"]
+    assert target in {0, 1}
+    if target == 1:
+        bold = torch.flip(bold, (0,))
+    sample = {**sample, "bold": bold, "target": target}
+    return sample
