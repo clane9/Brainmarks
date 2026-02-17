@@ -6,6 +6,7 @@ NeuroSTORM: Towards a general-purpose foundation model for fMRI analysis
 
 import torch.nn as nn
 from torch import Tensor
+import torch.nn.functional as F
 
 from fmri_fm_eval.models.base import Embeddings
 from fmri_fm_eval.models.registry import register_model
@@ -15,27 +16,16 @@ import torch
 from fmri_fm_eval import nisc
 from einops import rearrange
 import templateflow.api as tflow
-import types
-from types import SimpleNamespace
 from huggingface_hub import hf_hub_download
-import shutil
 
 
 try:
     from neurostorm.models.lightning_model import LightningModel
 
-    # original functions from: https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/preprocessing_volume.py#L12C1-L69C26
-    from neurostorm.datasets.preprocessing_volume import select_middle_96, temporal_resampling
-    from neurostorm.datasets.fmri_datasets import pad_to_96
-
 except ImportError as exc:
     raise ImportError(
         "neurostorm not installed. Please install the optional neurostorm extra with `uv sync --extra neurostorm`"
     ) from exc
-
-
-# Cache directory for downloaded files
-NEUROSTORM_CACHE_DIR = Path.home() / ".cache" / "fmri-fm-eval" / "neurostorm"
 
 
 NEUROSTORM_VARIANTS = {
@@ -47,15 +37,7 @@ NEUROSTORM_VARIANTS = {
 def fetch_neurostorm_checkpoint(variant: str) -> Path:
     repo_id = "zxcvb20001/NeuroSTORM"
     filename = NEUROSTORM_VARIANTS[variant]
-
-    cached_path = hf_hub_download(repo_id=repo_id, filename=filename)
-
-    # 2) copy into ./ with no containing folder
-    dst = NEUROSTORM_CACHE_DIR / filename
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(cached_path, dst)
-
-    return dst
+    return Path(hf_hub_download(repo_id=repo_id, filename=filename))
 
 
 # Dummy datamodule to initialize LitClassifier
@@ -90,26 +72,19 @@ class NeuroStormWrapper(nn.Module):
         model.load_state_dict(state_dict, strict=True)
 
         self.backbone = model.model
-        self.monkey_patch_forward_encoder()
         self.expected_seq_len = 20
         self.max_windows = 8
 
-    def monkey_patch_forward_encoder(self):
-        def forward_encoder(self, x, apply_mask: bool = True):
-            # patch method since original code always applies mask: https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/models/neurostorm.py#L1191C1-L1205C1
-            x = self.patch_embed(x)
-            mask = None
+    def forward_encoder(self, x):
+        # patch method since original code always applies mask
+        # https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/models/neurostorm.py#L1191C1-L1205C1
+        x = self.backbone.patch_embed(x)
 
-            if apply_mask:
-                x, mask = self.random_masking(x)
+        for i in range(self.backbone.num_layers):
+            x = self.backbone.pos_embeds[i](x)
+            x = self.backbone.layers[i](x.contiguous())
 
-            for i in range(self.num_layers):
-                x = self.pos_embeds[i](x)
-                x = self.layers[i](x.contiguous())
-
-            return x, mask
-
-        self.backbone.forward_encoder = types.MethodType(forward_encoder, self.backbone)
+        return x
 
     def forward(self, batch: dict[str, Tensor]) -> Embeddings:
         x = batch["bold"]
@@ -121,33 +96,24 @@ class NeuroStormWrapper(nn.Module):
         x = rearrange(x[..., :T], "b c x y z (w t) -> (b w) c x y z t", w=num_windows)
 
         # feats have shape (B, channels, H, W, D, T) (B, 288, 2, 2, 2, 20)
-        feats, mask = self.backbone.forward_encoder(x, apply_mask=False)
-
-        if feats.isnan().sum() > 0:
-            print("NaNs in feats")
+        feats = self.forward_encoder(x)
 
         feats = rearrange(
             feats, "(b w) c x y z t -> b (w x y z t) c", w=num_windows
         )  # convert to (B, patches, channels)
 
-        return Embeddings(
-            cls_embeds=None,
-            reg_embeds=None,
-            patch_embeds=feats,
-        )
+        return Embeddings(cls_embeds=None, reg_embeds=None, patch_embeds=feats)
 
 
 class NeuroStormTransform:
     """
-    0. unnormalize voxelwize z-scored data
-    1. convert to 4D volume
-    2. spatial resampling (to 2mm), temporal resampling to (0.8) and select middle 96 voxels
-    3. build mask as every zero value and drop every negative value
-    4. global normalization
-    5. fill background with global min value
-    6. pad/crop to expected sequence length t=20
-    7. pad to (96, 96, 96) for axes that are smaller
-    8. reshape to expected shape (C, H, W, D, T)
+    0. Unnormalize voxelwize z-scored data
+    1. temporal resampling
+    2. global z-score normalization
+    3. pad/crop to expected sequence length t=20
+    4. unmask input to full 4D volume
+    5. spatial crop/pad to (96, 96, 96)
+    6. reshape to expected shape (C, H, W, D, T)
     """
 
     def __init__(self):
@@ -160,11 +126,13 @@ class NeuroStormTransform:
         self.mask = torch.from_numpy(mask)
         self.mask_shape = mask.shape
 
-        # NeuroSTORM input size is (H, W, D, T) = (X, Y, Z, T) = (96, 96, 96, 20), https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/49dd063e48a635d66653e3b02e752256f6813621/README.md?plain=1#L297
+        # NeuroSTORM input size is (H, W, D, T) = (X, Y, Z, T) = (96, 96, 96, 20)
+        # https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/49dd063e48a635d66653e3b02e752256f6813621/README.md?plain=1#L297
         self.expected_seq_len = 20
         self.spatial_target = 96
 
-        # target temporal resampling: https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/preprocessing_volume.py#L54C1-L69C26
+        # target temporal resampling
+        # https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/preprocessing_volume.py#L54C1-L69C26
         self.target_tr = 0.8
 
     def __call__(self, sample: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -182,68 +150,87 @@ class NeuroStormTransform:
         """
         # unnormalize
         bold = sample["bold"] * sample["std"] + sample["mean"]
-
-        Z, Y, X = self.mask.shape
         tr = float(sample["tr"])
 
-        # unflatten bold to (X, Y, Z, T)
+        # temporal resampling
+        # nb, we break from original authors and resample while in sparse (T, V) format.
+        # this is a ~5x efficiency gain.
+        # https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/preprocessing_volume.py#L54C1-L69C26
+        if abs(tr - self.target_tr) >= 0.1:
+            bold = resample_to_target_tr(bold, tr, self.target_tr)
+
+        # every negative value is set to 0
+        # https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/preprocessing_volume.py#L119
+        bold = bold.clip(min=0.0)
+
+        # global normalization
+        # nb, normalization on sparse (T, V) for efficiency
+        # https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/preprocessing_volume.py#L123C1-L126C54
+        bold = (bold - bold.mean()) / bold.std()
+
+        # Pad if too short - repeat mean (consistent with other models)
+        T = len(bold)
+        if T < self.expected_seq_len:
+            mean = bold.mean(dim=0).repeat(self.expected_seq_len - T, 1)
+            bold = torch.cat([bold, mean], dim=0)
+            T = self.expected_seq_len
+
+        # Crop to fixed number of non-overlapping windows
+        num_windows = T // self.expected_seq_len
+        T = num_windows * self.expected_seq_len
+        bold = bold[:T, :]
+
+        # unflatten
+        # background is filled with min value
+        # https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/preprocessing_volume.py#L130C5-L132C54
         T, V = bold.shape
+        Z, Y, X = self.mask_shape
         mask = self.mask.to(device=bold.device)
-        vol = torch.full((T, Z, Y, X), 0, device=bold.device, dtype=bold.dtype)
-        vol[:, mask] = bold
-        vol = rearrange(vol, "t z y x -> x y z t")
+        fill_value = bold.min().item()
+        volume = torch.full((T, Z, Y, X), fill_value, device=bold.device)
+        volume[:, mask] = bold
+        volume = rearrange(volume, "t z y x -> t x y z")
 
         # flip x axis. the provided MNI data are in RAS orientation, but the model
         # expects HCP (FSL) convention LAS.
         # https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/preprocessing_volume.py#L76
-        vol = torch.flip(vol, (0,))
+        volume = torch.flip(volume, (1,))
 
-        header_handler = SimpleNamespace(get_zooms=lambda: (2.0, 2.0, 2.0, tr))
-        vol = vol.numpy()  # the functions expect numpy arrays
-        # the data is already resampled to 2mm as the model expects, so we skip spatial resampling
-        vol = temporal_resampling(vol, header_handler)
-        vol = select_middle_96(vol)
-        vol = torch.from_numpy(vol)  # convert back to torch
-        # get background https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/preprocessing_volume.py#L94
-        background = vol == 0
-        # every negative value is set to 0 https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/preprocessing_volume.py#L119
-        vol[vol < 0] = 0
+        # center crop or pad
+        # equivalent to select_middle_96 -> pad_to_96
+        # nb the crop for y axis is different from swift. this is intentional and follows the neurostorm select_middle_96
+        # https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/preprocessing_volume.py#L12
+        # https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/fmri_datasets.py#L12C1-L21C13
+        assert (X, Y, Z) == (91, 109, 91), "unexpected volume shape"
+        volume = F.pad(volume, (3, 2, -6, -7, 3, 2), value=fill_value)
 
-        # global z-score https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/preprocessing_volume.py#L123C1-L126C54
-        vol = (vol - vol[~background].mean()) / vol[~background].std()
-
-        # https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/preprocessing_volume.py#L130C5-L132C54
-        vol[background] = vol[~background].min().item()
-
-        T = vol.shape[3]  # get T after resampling
-        # Pad if too short - repeat mean (consistent with other models)
-        if T < self.expected_seq_len:
-            mean = vol.mean(dim=3, keepdim=True).repeat(1, 1, 1, self.expected_seq_len - T)
-            vol = torch.cat([vol, mean], dim=3)
-
-        # Crop to fixed number of non-overlapping windows
-        num_windows = vol.shape[3] // self.expected_seq_len
-        T_cropped = num_windows * self.expected_seq_len
-        vol = vol[..., :T_cropped]
-
-        volume = rearrange(vol, "x y z t -> 1 x y z t")  # include the channel dimension
-        # pad to 96x96x96 https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/fmri_datasets.py#L12C1-L21C13
-        volume = pad_to_96(volume)
-        # volume = resize_volume(volume, (self.spatial_target, self.spatial_target, self.spatial_target, self.expected_seq_len)) # this is not needed I think, we're already on the dimension required: https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/fmri_datasets.py#L26C1-L56C17
-        # with_voxel_norm is False on the checkpoint: https://github.com/CUHK-AIM-Group/NeuroSTORM/blob/5bb4f7c844ed7544f95cd934eece69b390a55ea4/datasets/fmri_datasets.py#L117
-
-        if volume.isnan().sum() > 0:
-            print("NaNs in volume")
+        # rearrange to (C, X, Y, Z, T)
+        volume = rearrange(volume, "t x y z -> 1 x y z t")
 
         sample["bold"] = volume
         return sample
 
 
+def resample_to_target_tr(
+    x: Tensor,
+    tr: float,
+    target_tr: float,
+    mode: str = "linear",
+) -> Tensor:
+    # x: [T, D]
+    x = F.interpolate(
+        x.T.unsqueeze(0),
+        size=round(float(tr) * len(x) / float(target_tr)),
+        mode=mode,
+    )  # [1, D, T]
+    return x.squeeze(0).T
+
+
 @register_model
-def neurostorm_mae_0p5() -> tuple[NeuroStormTransform, NeuroStormWrapper]:
+def neurostorm() -> tuple[NeuroStormTransform, NeuroStormWrapper]:
     return NeuroStormTransform(), NeuroStormWrapper(variant="0.5")
 
 
 @register_model
-def neurostorm_mae_0p8() -> tuple[NeuroStormTransform, NeuroStormWrapper]:
+def neurostorm_0p8() -> tuple[NeuroStormTransform, NeuroStormWrapper]:
     return NeuroStormTransform(), NeuroStormWrapper(variant="0.8")

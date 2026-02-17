@@ -150,16 +150,16 @@ class SwiftTransform:
         """
         # unnormalize
         bold = sample["bold"] * sample["std"] + sample["mean"]
+        tr = float(sample["tr"])
+
+        # temporal resampling in case the tr is different from pretraining data.
+        if abs(tr - self.target_tr) >= 0.1:
+            bold = resample_to_target_tr(bold, tr, self.target_tr)
 
         # global z-score
         # we don't need to worry about background since the data are already masked
         # https://github.com/Transconnectome/SwiFT/blob/0b07cb156d77a7de33078c8f6fe3ddffa7b5ae9c/project/module/utils/data_preprocess_and_load/preprocessing.py#L32-L35
         bold = (bold - bold.mean()) / bold.std()
-
-        # temporal resampling in case the tr is different from pretraining data.
-        tr = sample["tr"]
-        if abs(tr - self.target_tr) >= 0.1:
-            bold = resample_to_target_tr(bold, tr, self.target_tr)
 
         # Pad if too short - repeat mean (consistent with other models)
         T = len(bold)
@@ -181,7 +181,7 @@ class SwiftTransform:
         mask = self.mask.to(device=bold.device)
         fill_value = bold.min().item()
         volume = torch.full((T, Z, Y, X), fill_value, device=bold.device)
-        volume[:, mask] = bold  # Assign flattened voxels to mask positions
+        volume[:, mask] = bold
         volume = rearrange(volume, "t z y x -> t x y z")
 
         # flip x axis. the provided MNI data are in RAS orientation, but the model
