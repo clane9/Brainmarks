@@ -193,10 +193,7 @@ def main(args: DictConfig):
     # load checkpoint/resume training
     # checkpoint only includes classifiers since backbone is frozen to save space
     ckpt_meta = load_model(args, model.classifiers, optimizer)
-    if ckpt_meta is not None:
-        best_info = ckpt_meta["best_info"]
-    else:
-        best_info = {"score": float("-inf")}
+    best_score = ckpt_meta["best_score"] if ckpt_meta else float("-inf")
 
     # training loss
     criterion = nn.CrossEntropyLoss(reduction="none")
@@ -259,23 +256,24 @@ def main(args: DictConfig):
         with (output_dir / "train_log.json").open("a") as f:
             print(json.dumps(merged_stats), file=f)
 
-        if cv_score > best_info["score"]:
-            best_info = {
-                "score": cv_score,
-                "hparam": hparam,
-                "hparam_id": hparam_id,
-                "epoch": epoch,
-            }
-            is_best = True
-        else:
-            is_best = False
+        is_best = cv_score > best_score
+        if is_best:
+            best_score = cv_score
+        meta = {
+            "score": cv_score,
+            "hparam": hparam,
+            "hparam_id": hparam_id,
+            "epoch": epoch,
+            "is_best": is_best,
+            "best_score": best_score,
+        }
 
         save_model(
             args,
             epoch,
             model.classifiers,
             optimizer,
-            meta={"best_info": best_info},
+            meta=meta,
             is_best=is_best,
         )
 
@@ -283,15 +281,19 @@ def main(args: DictConfig):
             print(f"backing up to remote: {args.remote_dir}")
             ut.rsync(args.remote_dir, output_dir)
 
-    print("evaluating best model")
-    best_ckpt = torch.load(
-        output_dir / "checkpoint-best.pth", map_location="cpu", weights_only=True
-    )
-    model.classifiers.load_state_dict(best_ckpt["model"])
-    best_info = best_ckpt["meta"]["best_info"]
-    print(f"best model info:\n{json.dumps(best_info)}")
+    early_stopping = args.get("early_stopping", True)
+    if early_stopping:
+        print("evaluating best model")
+        ckpt_path = output_dir / "checkpoint-best.pth"
+    else:
+        print(f"evaluating last model ({early_stopping=})")
+        ckpt_path = output_dir / "checkpoint-last.pth"
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    model.classifiers.load_state_dict(ckpt["model"])
+    ckpt_meta = ckpt["meta"]
+    print(f"eval model info:\n{json.dumps(ckpt_meta)}")
 
-    hparam_id, hparam = best_info["hparam_id"], best_info["hparam"]
+    hparam_id, hparam = ckpt_meta["hparam_id"], ckpt_meta["hparam"]
     hparam_fmt = format_hparam(hparam_id, hparam)
 
     header = {
@@ -299,14 +301,14 @@ def main(args: DictConfig):
         "repr": args.representation,
         "clf": args.classifier,
         "dataset": args.dataset,
-        "epoch": best_info["epoch"],
+        "epoch": ckpt_meta["epoch"],
         "lr": hparam[0] * args.lr,
         "wd": hparam[1] * args.weight_decay,
         "hparam_id": hparam_id,
         "hparam": json.dumps(hparam),
     }
     eval_stats = {
-        "eval/epoch_best": header["epoch"],
+        "eval/epoch": header["epoch"],
         "eval/id_best": header["hparam_id"],
         "eval/lr_best": header["lr"],
         "eval/wd_best": header["wd"],

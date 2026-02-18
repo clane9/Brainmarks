@@ -60,6 +60,9 @@ metrics:
 # assumes higher is better
 cv_metric: f1
 
+# evaluate best checkpoint wrt to cv score
+early_stopping: true
+
 amp: true
 
 device: cuda
