@@ -487,6 +487,8 @@ def train_one_epoch(
             loss = all_loss.mean()
 
         loss_value = loss.item()
+        all_loss_values = all_loss.tolist()
+
         if not math.isfinite(loss_value):
             raise RuntimeError(f"Loss is {loss_value}, stopping training")
 
@@ -498,10 +500,13 @@ def train_one_epoch(
             all_grad = []
             for clf in model.classifiers:
                 grad = nn.utils.clip_grad_norm_(clf.parameters(), args.clip_grad)
-                all_grad.append(grad)
-            total_grad = torch.stack(all_grad).norm()
+                all_grad.append(grad.cpu())
+            all_grad = torch.stack(all_grad)
+            total_grad = all_grad.norm()
             optimizer.step()
             optimizer.zero_grad()
+
+            all_grad_values = all_grad.tolist()
 
         if need_update:
             log_metric_dict = {
@@ -514,13 +519,13 @@ def train_one_epoch(
             all_metric_dict = {}
             all_metric_dict.update(
                 {
-                    f"loss_{format_hparam(ii, hparam)}": all_loss[ii].item()
+                    f"loss_{format_hparam(ii, hparam)}": all_loss_values[ii]
                     for ii, hparam in enumerate(model.hparams)
                 }
             )
             all_metric_dict.update(
                 {
-                    f"grad_{format_hparam(ii, hparam)}": all_grad[ii].item()
+                    f"grad_{format_hparam(ii, hparam)}": all_grad_values[ii]
                     for ii, hparam in enumerate(model.hparams)
                 }
             )
@@ -531,6 +536,21 @@ def train_one_epoch(
             if log_wandb:
                 wandb.log({f"train/{k}": v for k, v in log_metric_dict.items()}, global_step)
                 wandb.log({f"train/{k}": v for k, v in all_metric_dict.items()}, global_step)
+
+        # freeze classifiers whose loss exceeds the divergence threshold
+        diverge_threshold = 20 * math.log(args.num_classes)
+        for ii, clf in enumerate(model.classifiers):
+            is_training = any(p.requires_grad for p in clf.parameters())
+            if all_loss_values[ii] > diverge_threshold and is_training:
+                hparam = model.hparams[ii]
+                print(
+                    f"WARNING: classifier {ii} {hparam} diverged "
+                    f"(loss={all_loss_values[ii]:.2f} > {diverge_threshold:.2f}) "
+                    f"at epoch {epoch}, step {batch_idx}. Freezing."
+                )
+                clf.requires_grad_(False)
+                for p in clf.parameters():
+                    p.data.zero_()
 
         if use_cuda:
             torch.cuda.synchronize()
