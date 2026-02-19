@@ -195,6 +195,15 @@ def main(args: DictConfig):
     ckpt_meta = load_model(args, model.classifiers, optimizer)
     best_score = ckpt_meta["best_score"] if ckpt_meta else float("-inf")
 
+    # freeze classifiers that have already diverged after resume
+    if args.start_epoch > 0:
+        for ii, clf in enumerate(model.classifiers):
+            hparam = model.hparams[ii]
+            clf_norm = torch.stack([p.norm() for p in clf.parameters()]).norm().item()
+            if clf_norm == 0:
+                print(f"freezing diverged classifier {ii} {hparam}")
+                clf.requires_grad_(False)
+
     # training loss
     criterion = nn.CrossEntropyLoss(reduction="none")
 
@@ -538,19 +547,19 @@ def train_one_epoch(
                 wandb.log({f"train/{k}": v for k, v in all_metric_dict.items()}, global_step)
 
         # freeze classifiers whose loss exceeds the divergence threshold
-        diverge_threshold = 20 * math.log(args.num_classes)
-        for ii, clf in enumerate(model.classifiers):
-            is_training = any(p.requires_grad for p in clf.parameters())
-            if all_loss_values[ii] > diverge_threshold and is_training:
-                hparam = model.hparams[ii]
-                print(
-                    f"WARNING: classifier {ii} {hparam} diverged "
-                    f"(loss={all_loss_values[ii]:.2f} > {diverge_threshold:.2f}) "
-                    f"at epoch {epoch}, step {batch_idx}. Freezing."
-                )
-                clf.requires_grad_(False)
-                for p in clf.parameters():
-                    p.data.zero_()
+        if need_update:
+            diverge_threshold = 20 * math.log(args.num_classes)
+            for ii, clf in enumerate(model.classifiers):
+                if all_loss_values[ii] > diverge_threshold:
+                    hparam = model.hparams[ii]
+                    print(
+                        f"WARNING: classifier {ii} {hparam} diverged "
+                        f"(loss={all_loss_values[ii]:.2f} > {diverge_threshold:.2f}) "
+                        f"at step {global_step}. Freezing."
+                    )
+                    clf.requires_grad_(False)
+                    for p in clf.parameters():
+                        p.data.zero_()
 
         if use_cuda:
             torch.cuda.synchronize()
@@ -691,10 +700,17 @@ def save_model(args, epoch, model, optimizer, meta=None, is_best=None):
     }
 
     print(f"saving checkpoint {last_checkpoint_path}")
-    torch.save(to_save, last_checkpoint_path)
+    safe_save(to_save, last_checkpoint_path)
     if is_best:
         print(f"saving best checkpoint {best_checkpoint_path}")
-        torch.save(to_save, best_checkpoint_path)
+        safe_save(to_save, best_checkpoint_path)
+
+
+def safe_save(obj, path):
+    path = Path(path)
+    tmp_path = path.parent / f".tmp-{path.name}"
+    torch.save(obj, tmp_path)
+    tmp_path.rename(path)
 
 
 def load_model(args, model, optimizer):
