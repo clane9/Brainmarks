@@ -64,6 +64,8 @@ brain-semantoks = [
 
 neurostorm = [
     "neurostorm",
+    "mamba-ssm==2.2.5",
+    "wheel",
 ]
 
 fmri-fm = [
@@ -83,6 +85,9 @@ brainharmonix = { git = "https://github.com/MedARC-AI/Brain-Harmony.git", rev = 
 brain-semantoks = { git = "https://github.com/SamGijsen/Brain-Semantoks.git", rev = "4b48b5942b2f7df60fe8aaf3f328733fad647b54" }
 neurostorm = { git = "https://github.com/ckadirt/NeuroSTORM.git", rev = "7fa3b96c8021735f1d84a81d0367b2568a2dc6e4"  }
 fmri-fm = { git = "https://github.com/MedARC-AI/fmri-fm.git", rev = "b44b7ccb728e8828a75e55cc1ff5e3d01d6ac751" }
+
+[tool.uv]
+no-build-isolation-package = ["mamba-ssm"]
 
 [tool.ruff]
 line-length = 100
