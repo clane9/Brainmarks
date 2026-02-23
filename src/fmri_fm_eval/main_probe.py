@@ -169,12 +169,7 @@ def main(args: DictConfig):
         f"{args.batch_size} bs per gpu x {args.accum_iter} accum"
     )
 
-    if not args.get("lr"):
-        args.lr = args.base_lr * total_batch_size / 256
-        print(f"lr: {args.lr:.2e} = {args.base_lr:.2e} x {total_batch_size} / 256")
-    else:
-        print(f"lr: {args.lr:.2e}")
-
+    print(f"lr: {args.lr:.2e}")
     ut.update_lr(param_groups, args.lr)
     ut.update_wd(param_groups, args.weight_decay)
     optimizer = torch.optim.AdamW(param_groups)
@@ -290,74 +285,14 @@ def main(args: DictConfig):
             print(f"backing up to remote: {args.remote_dir}")
             ut.rsync(args.remote_dir, output_dir)
 
-    early_stopping = args.get("early_stopping", True)
-    if early_stopping:
-        print("evaluating best model")
-        ckpt_path = output_dir / "checkpoint-best.pth"
-    else:
-        print(f"evaluating last model ({early_stopping=})")
-        ckpt_path = output_dir / "checkpoint-last.pth"
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-    model.classifiers.load_state_dict(ckpt["model"])
-    ckpt_meta = ckpt["meta"]
-    print(f"eval model info:\n{json.dumps(ckpt_meta)}")
-
-    hparam_id, hparam = ckpt_meta["hparam_id"], ckpt_meta["hparam"]
-    hparam_fmt = format_hparam(hparam_id, hparam)
-
-    header = {
-        "model": args.model,
-        "repr": args.representation,
-        "clf": args.classifier,
-        "dataset": args.dataset,
-        "epoch": ckpt_meta["epoch"],
-        "lr": hparam[0] * args.lr,
-        "wd": hparam[1] * args.weight_decay,
-        "hparam_id": hparam_id,
-        "hparam": json.dumps(hparam),
-    }
-    eval_stats = {
-        "eval/epoch": header["epoch"],
-        "eval/id_best": header["hparam_id"],
-        "eval/lr_best": header["lr"],
-        "eval/wd_best": header["wd"],
-    }
-    table = []
-
-    for split, loader in eval_loaders_dict.items():
-        stats, preds, targets = evaluate(
-            args,
-            model,
-            criterion,
-            loader,
-            args.epochs,
-            device,
-            eval_name=split,
+    for ckpt_label in ["last", "best"]:
+        evaluate_checkpoint(
+            args, model, criterion, eval_loaders_dict, device, ckpt_label, output_dir, log_wandb
         )
-        record = {**header, "split": split}
 
-        preds = preds[:, hparam_id]
-        bootstrap_result = bootstrap_ci(args, preds, targets)
-
-        record["loss"] = eval_stats[f"eval/{split}/loss"] = stats[f"{split}/loss_{hparam_fmt}"]
-        for metric in args.metrics:
-            score = stats[f"{split}/{metric}_{hparam_fmt}"]
-            record[metric] = eval_stats[f"eval/{split}/{metric}"] = score
-            record[f"{metric}_std"] = bootstrap_result[metric]["std"]
-
-        table.append(record)
-        np.savez(output_dir / f"preds_{split}.npz", preds=preds, targets=targets)
-
-    table = pd.DataFrame.from_records(table)
+    table = pd.read_csv(output_dir / "eval_table.csv")
     table_fmt = table.to_markdown(index=False, floatfmt=".5g")
     print(f"eval results:\n\n{table_fmt}\n\n")
-    table.to_csv(output_dir / "eval_table.csv", index=False)
-
-    with (output_dir / "eval_log.json").open("w") as f:
-        print(json.dumps(eval_stats), file=f)
-
-    if log_wandb:
-        wandb.log(eval_stats, args.epochs * args.steps_per_epoch)
 
     total_time = time.monotonic() - start_time
     print(f"done! total time: {datetime.timedelta(seconds=int(total_time))}")
@@ -636,6 +571,91 @@ def evaluate(
     stats = {f"{eval_name}/{k}": v for k, v in stats.items()}
 
     return stats, preds, targets
+
+
+def evaluate_checkpoint(
+    args: DictConfig,
+    model: ClassifierGrid,
+    criterion: nn.Module,
+    eval_loaders_dict: dict[str, DataLoader],
+    device: torch.device,
+    ckpt_label: str,
+    output_dir: Path,
+    log_wandb: bool,
+):
+    ckpt_path = output_dir / f"checkpoint-{ckpt_label}.pth"
+    print(f"evaluating {ckpt_label} checkpoint: {ckpt_path}")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    model.classifiers.load_state_dict(ckpt["model"])
+    ckpt_meta = ckpt["meta"]
+    print(f"eval model info:\n{json.dumps(ckpt_meta)}")
+
+    hparam_id, hparam = ckpt_meta["hparam_id"], ckpt_meta["hparam"]
+    hparam_fmt = format_hparam(hparam_id, hparam)
+
+    header = {
+        "model": args.model,
+        "repr": args.representation,
+        "clf": args.classifier,
+        "dataset": args.dataset,
+        "ckpt": ckpt_label,
+        "epoch": ckpt_meta["epoch"],
+        "lr": hparam[0] * args.lr,
+        "wd": hparam[1] * args.weight_decay,
+        "hparam_id": hparam_id,
+        "hparam": json.dumps(hparam),
+    }
+    eval_stats = {
+        f"eval/{ckpt_label}/epoch": header["epoch"],
+        f"eval/{ckpt_label}/id_best": header["hparam_id"],
+        f"eval/{ckpt_label}/lr_best": header["lr"],
+        f"eval/{ckpt_label}/wd_best": header["wd"],
+    }
+    table = []
+
+    for split, loader in eval_loaders_dict.items():
+        stats, preds, targets = evaluate(
+            args,
+            model,
+            criterion,
+            loader,
+            args.epochs,
+            device,
+            eval_name=split,
+        )
+        record = {**header, "split": split}
+
+        preds = preds[:, hparam_id]
+        bootstrap_result = bootstrap_ci(args, preds, targets)
+
+        log_prefix = f"eval/{ckpt_label}/{split}"
+        record["loss"] = eval_stats[f"{log_prefix}/loss"] = stats[f"{split}/loss_{hparam_fmt}"]
+        for metric in args.metrics:
+            score = stats[f"{split}/{metric}_{hparam_fmt}"]
+            std = bootstrap_result[metric]["std"]
+            record[metric] = eval_stats[f"{log_prefix}/{metric}"] = score
+            record[f"{metric}_std"] = eval_stats[f"{log_prefix}/{metric}_std"] = std
+
+        table.append(record)
+        np.savez(output_dir / f"preds_{ckpt_label}_{split}.npz", preds=preds, targets=targets)
+
+    table = pd.DataFrame.from_records(table)
+    table.to_csv(output_dir / f"eval_table_{ckpt_label}.csv", index=False)
+
+    with (output_dir / f"eval_log_{ckpt_label}.json").open("w") as f:
+        print(json.dumps(eval_stats), file=f)
+
+    if log_wandb:
+        wandb.log(eval_stats, args.epochs * args.steps_per_epoch)
+
+    preferred = "best" if args.get("early_stopping", True) else "last"
+    if ckpt_label == preferred:
+        table.to_csv(output_dir / "eval_table.csv", index=False)
+        eval_stats = {k.replace(f"/{ckpt_label}", ""): v for k, v in eval_stats.items()}
+        with (output_dir / "eval_log.json").open("w") as f:
+            print(json.dumps(eval_stats), file=f)
+        if log_wandb:
+            wandb.log(eval_stats, args.epochs * args.steps_per_epoch)
 
 
 def bootstrap_ci(args: DictConfig, preds: np.ndarray, targets: np.ndarray):
