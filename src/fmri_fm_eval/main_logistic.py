@@ -14,10 +14,11 @@ import sklearn.metrics
 import sklearn.utils
 import torch
 import torch.nn as nn
-import wandb
 from cloudpathlib import S3Path
 from omegaconf import DictConfig, OmegaConf
 from sklearn.linear_model import LogisticRegressionCV
+from sklearn.model_selection import StratifiedShuffleSplit, train_test_split
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader
 
@@ -32,12 +33,14 @@ DEFAULT_CONFIG = Path(__file__).parent / "config/default_logistic.yaml"
 METRICS = {
     "acc": sklearn.metrics.accuracy_score,
     "f1": partial(sklearn.metrics.f1_score, average="macro"),
+    "bacc": sklearn.metrics.balanced_accuracy_score,
 }
 
 # sklearn scoring names for LogisticRegressionCV
 SKLEARN_SCORING = {
     "acc": "accuracy",
     "f1": "f1_macro",
+    "bacc": "balanced_accuracy",
 }
 
 
@@ -50,7 +53,7 @@ def main(args: DictConfig):
 
     if not args.get("name"):
         args.name = (
-            f"{args.name_prefix}/{args.model}/{args.representation}__logistic/{args.dataset}"
+            f"{args.name_prefix}/{args.dataset}__{args.model}__{args.representation}__logistic"
         )
     args.output_dir = f"{args.output_root}/{args.name}"
     output_dir = Path(args.output_dir)
@@ -70,15 +73,6 @@ def main(args: DictConfig):
         assert args == prev_cfg, "current config doesn't match previous config"
     else:
         OmegaConf.save(args, out_cfg_path)
-
-    if args.wandb:
-        wandb.init(
-            entity=args.wandb_entity,
-            project=args.wandb_project,
-            name=args.name,
-            notes=args.notes,
-            config=OmegaConf.to_container(args),
-        )
 
     ut.setup_for_distributed(log_path=output_dir / "log.txt")
 
@@ -124,52 +118,129 @@ def main(args: DictConfig):
     for split, features in features_dict.items():
         print(f"{split} features: {features.shape}")
 
-    # standardize features
-    print("fitting StandardScaler on training features")
-    scaler = StandardScaler()
-    train_features = scaler.fit_transform(features_dict["train"])
-    features_dict["train"] = train_features
+    # combine train and validation since cv is done internally
+    # also drop any extra splits
+    merged_features_dict = {
+        "train": np.concatenate([features_dict["train"], features_dict["validation"]]),
+        "test": features_dict["test"],
+    }
+    merged_targets_dict = {
+        "train": np.concatenate([targets_dict["train"], targets_dict["validation"]]),
+        "test": targets_dict["test"],
+    }
+    validation_size = len(features_dict["validation"]) / len(merged_features_dict["train"])
 
-    for split in features_dict:
-        if split != "train":
-            features_dict[split] = scaler.transform(features_dict[split])
-
-    # fit logistic regression with cross-validation
-    print(f"fitting LogisticRegressionCV (cv={args.cv_folds}, Cs={args.Cs})")
-    class_weight = "balanced" if args.balanced_sampling else None
-    scoring = SKLEARN_SCORING.get(args.cv_metric, args.cv_metric)
-
-    clf = LogisticRegressionCV(
-        Cs=args.Cs,
-        cv=args.cv_folds,
-        scoring=scoring,
-        max_iter=args.max_iter,
-        class_weight=class_weight,
-        random_state=args.seed,
-        n_jobs=args.num_workers,
+    print("evaluating fixed splits")
+    table = evaluate(
+        args, merged_features_dict, merged_targets_dict, validation_size=validation_size
     )
+    table_fmt = table.to_markdown(index=False, floatfmt=".5g")
+    print(f"eval results (fixed splits):\n\n{table_fmt}\n\n")
 
-    fit_start = time.monotonic()
+    if args.n_trials:
+        print(f"evaluating random splits (n={args.n_trials})")
+        all_features = np.concatenate(list(merged_features_dict.values()))
+        all_targets = np.concatenate(list(merged_targets_dict.values()))
+
+        trial_tables = []
+        for trial_id in range(1, args.n_trials + 1):
+            features_train, features_test, targets_train, targets_test = train_test_split(
+                all_features,
+                all_targets,
+                train_size=len(merged_features_dict["train"]),
+                stratify=all_targets,
+                random_state=args.seed + trial_id,
+            )
+            trial_features_dict = {"train": features_train, "test": features_test}
+            trial_targets_dict = {"train": targets_train, "test": targets_test}
+            trial_table = evaluate(
+                args,
+                trial_features_dict,
+                trial_targets_dict,
+                validation_size=validation_size,
+                trial_id=trial_id,
+            )
+            trial_tables.append(trial_table)
+            # print test row of table
+            print(json.dumps(trial_table.iloc[-1].to_dict()))
+
+        trial_tables = pd.concat(trial_tables, ignore_index=True)
+        trial_tables["split"] = pd.Categorical(
+            trial_tables["split"], categories=["train", "test"], ordered=True
+        )
+        summary = (
+            trial_tables.groupby(["model", "repr", "clf", "dataset", "split"], observed=True)
+            .agg(
+                {
+                    "trial": "count",
+                    "C": ["mean", "std"],
+                    **{metric: ["mean", "std"] for metric in args.metrics},
+                }
+            )
+            .reset_index()
+        )
+        summary.columns = ["model", "repr", "clf", "dataset", "split", "n_trials", "C", "C_std"] + [
+            f"{metric}{suffix}" for metric in args.metrics for suffix in ["", "_std"]
+        ]
+        summary_fmt = summary.to_markdown(index=False, floatfmt=".5g")
+        print(f"eval results (random splits):\n\n{summary_fmt}\n\n")
+        table = pd.concat([table, trial_tables], ignore_index=True)
+
+    table.to_csv(output_dir / "eval_table.csv", index=False)
+
+    total_time = time.monotonic() - start_time
+    print(f"done! total time: {datetime.timedelta(seconds=int(total_time))}")
+
+    if args.remote_dir:
+        print(f"backing up to remote: {args.remote_dir}")
+        ut.rsync(args.remote_dir, output_dir)
+
+
+def evaluate(
+    args: DictConfig,
+    features_dict: dict[str, np.ndarray],
+    targets_dict: dict[str, np.ndarray],
+    validation_size: float,
+    trial_id: int | None = None,
+) -> dict:
+    random_state = sklearn.utils.check_random_state(args.seed)
+    cv_seed = random_state.randint(1000, 10000)
+
+    cv = StratifiedShuffleSplit(
+        n_splits=args.cv_folds, test_size=validation_size, random_state=cv_seed
+    )
+    scoring = SKLEARN_SCORING.get(args.cv_metric, args.cv_metric)
+    class_weight = "balanced" if args.balanced_sampling else None
+
+    clf = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "clf",
+                LogisticRegressionCV(
+                    Cs=args.Cs,
+                    cv=cv,
+                    scoring=scoring,
+                    max_iter=args.max_iter,
+                    class_weight=class_weight,
+                    n_jobs=args.num_workers,
+                    random_state=random_state,
+                ),
+            ),
+        ]
+    )
     clf.fit(features_dict["train"], targets_dict["train"])
-    fit_time = time.monotonic() - fit_start
-    print(f"fit time: {datetime.timedelta(seconds=int(fit_time))}")
-    print(f"best C: {clf.C_[0]:.4g}")
 
-    # evaluate on all splits
-    print("evaluating on all splits")
     header = {
         "model": args.model,
         "repr": args.representation,
         "clf": "logistic",
         "dataset": args.dataset,
-        "C": float(clf.C_[0]),
+        "trial": trial_id,
+        "C": float(clf[-1].C_[0]),
     }
-    eval_stats = {
-        "eval/C_best": float(clf.C_[0]),
-    }
-    table = []
-    log_wandb = args.wandb and ut.is_main_process()
 
+    table = []
     for split in features_dict:
         features = features_dict[split]
         targets = targets_dict[split]
@@ -181,30 +252,12 @@ def main(args: DictConfig):
 
         for metric in args.metrics:
             metric_fn = METRICS[metric]
-            score = metric_fn(targets, preds)
-            record[metric] = eval_stats[f"eval/{split}/{metric}"] = score
+            record[metric] = metric_fn(targets, preds)
             record[f"{metric}_std"] = bootstrap_result[metric]["std"]
-
         table.append(record)
-        np.savez(output_dir / f"preds_{split}.npz", preds=preds, targets=targets)
 
     table = pd.DataFrame.from_records(table)
-    table_fmt = table.to_markdown(index=False, floatfmt=".5g")
-    print(f"eval results:\n\n{table_fmt}\n\n")
-    table.to_csv(output_dir / "eval_table.csv", index=False)
-
-    with (output_dir / "eval_log.json").open("w") as f:
-        print(json.dumps(eval_stats), file=f)
-
-    if log_wandb:
-        wandb.log(eval_stats)
-
-    total_time = time.monotonic() - start_time
-    print(f"done! total time: {datetime.timedelta(seconds=int(total_time))}")
-
-    if args.remote_dir:
-        print(f"backing up to remote: {args.remote_dir}")
-        ut.rsync(args.remote_dir, output_dir)
+    return table
 
 
 @torch.inference_mode()
@@ -226,7 +279,6 @@ def extract_features(
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=args.num_workers,
-            prefetch_factor=args.prefetch_factor if args.num_workers else None,
             drop_last=False,
         )
 

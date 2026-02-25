@@ -9,7 +9,7 @@ name_prefix: eval_logistic
 # currently only S3 supported
 remote_root: null
 
-# Description of the run. Goes in wandb notes.
+# Description of the run
 notes: null
 
 # Model and dataset extra kwargs
@@ -17,8 +17,7 @@ model_kwargs: {}
 dataset_kwargs: {}
 
 # Data loader
-num_workers: 8
-prefetch_factor: 8
+num_workers: 16
 batch_size: 64
 
 # LogisticRegressionCV settings
@@ -32,9 +31,13 @@ balanced_sampling: false
 metrics:
 - acc
 - f1
+- bacc
 
 # metric for CV selection (passed to LogisticRegressionCV scoring)
-cv_metric: f1
+cv_metric: bacc
+
+# number of randomized split trials (0 to disable)
+n_trials: 100
 
 amp: true
 
@@ -42,7 +45,3 @@ device: cuda
 
 seed: 4466
 debug: false
-
-wandb: true
-wandb_entity: null
-wandb_project: fMRI-fm-eval
