@@ -36,6 +36,9 @@ class BrainHarmonixFTransform:
     # standard number of temporal patches in a sequence
     target_num_patches = 18
 
+    def __init__(self, coord_normalize: bool = False):
+        self.coord_normalize = coord_normalize
+
     def __call__(self, sample: dict[str, Tensor]) -> dict[str, Tensor]:
         bold = sample["bold"]  # (T, D) - z-score normalized data
         mean = sample["mean"]  # (1, D)
@@ -43,7 +46,8 @@ class BrainHarmonixFTransform:
         tr = float(sample["tr"])  # float - repetition time
 
         # Convert z-scored data back to raw signal
-        bold = bold * std + mean
+        if not self.coord_normalize:
+            bold = bold * std + mean
 
         # https://github.com/hzlab/Brain-Harmony/blob/453edc18aed68d834401159f81757297d0c5281f/datasets/datasets.py#L258
         # apply global robust scaling
@@ -98,10 +102,13 @@ class BrainHarmonixFTransform:
         # QUESTIONS:
         #   - the downstream ABIDE_I_fMRI_Dataset doesn't include any explicit
         #     normalization. how are data processed for downstream eval?
+        all_bold = []
         all_bold_mean = []
         for sample in tqdm(train_dataset):
             # get per ROI means, already in the sample
+            bold = sample["bold"]  # (T, D)
             mean = sample["mean"]  # (1, D)
+            all_bold.append(bold)
             all_bold_mean.append(mean.squeeze(0))
 
         # compute median and iqr over ROI means
@@ -109,9 +116,16 @@ class BrainHarmonixFTransform:
         # like 1 / sqrt(T) * iqr of the actual data. if the eval time series are much
         # different sequence length than the training data, you will get a significant
         # scale difference.
+        all_bold = torch.cat(all_bold)
         all_bold_mean = torch.stack(all_bold_mean)
         q = torch.tensor([0.25, 0.5, 0.75], dtype=all_bold_mean.dtype)
-        q1, median, q3 = torch.quantile(all_bold_mean, q, dim=0)
+        if not self.coord_normalize:
+            q1, median, q3 = torch.quantile(all_bold_mean, q, dim=0)
+        else:
+            # when using coordinate wise normalization, we follow their preprocess=True (direct) mode
+            # and compute normalization stats over the full data
+            # https://github.com/hzlab/Brain-Harmony/blob/453edc18aed68d834401159f81757297d0c5281f/datasets/datasets.py#L134-L136
+            q1, median, q3 = torch.quantile(all_bold, q, dim=0)
         iqr = q3 - q1
         self.global_stats_ = median, iqr
 
@@ -190,7 +204,7 @@ def download_file(url: str, path: Path) -> None:
 
 
 @register_model
-def brain_harmonix_f():
+def brain_harmonix_f(**kwargs):
     geo_harm_file, gradient_file = fetch_brain_harmonix_pos_embeds()
 
     config = conf_embed_downstream.get_config()
@@ -221,6 +235,6 @@ def brain_harmonix_f():
     ]
     assert not unexpected_keys
 
-    transform = BrainHarmonixFTransform()
+    transform = BrainHarmonixFTransform(**kwargs)
     model = BrainHarmonixFWrapper(fmri_encoder)
     return transform, model
