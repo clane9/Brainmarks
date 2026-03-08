@@ -14,7 +14,8 @@ https://github.com/vandijklab/BrainLM/blob/eded39c86c27e03f5ead1d6a14311e92d1305
 """
 
 import importlib.resources
-from typing import Iterable
+import math
+from typing import Literal, Iterable
 
 import numpy as np
 import pandas as pd
@@ -80,6 +81,7 @@ class BrainLMTransform:
         max_val_to_scale: float = DEFAULT_MAX_VAL_TO_SCALE,
         repeat_channels: bool = True,
         coord_normalize: bool = False,
+        pad_mode: Literal["mean", "tile"] = "mean",
     ):
         """
         Args:
@@ -89,12 +91,14 @@ class BrainLMTransform:
                               Default 5.6430855 is for RobustScaler normalized data.
                               Will be different for z-score normalized data.
             coord_normalize: z-score each coordinate time series independently
+            pad_mode: how to pad input if too short
         """
         self.num_timepoints = num_timepoints
         self.target_tr = target_tr
         self.max_val_to_scale = max_val_to_scale
         self.repeat_channels = repeat_channels
         self.coord_normalize = coord_normalize
+        self.pad_mode = pad_mode
 
         # Load voxel reordering indices from coords dataset
         coords_ds = load_a424_coords()  # (424, 4), cols [Index, X, Y, Z]
@@ -133,10 +137,13 @@ class BrainLMTransform:
 
         T, D = bold.shape
 
-        # Pad with mean if too short
+        # Pad with mean or tile if too short
         if T < self.num_timepoints:
-            pad_size = self.num_timepoints - T
-            bold = torch.cat([bold, bold.mean(dim=0).repeat(pad_size, 1)])
+            if self.pad_mode == "tile":
+                bold = torch.tile(bold, (math.ceil(self.num_timepoints / T), 1))
+                bold = bold[: self.num_timepoints]
+            else:
+                bold = torch.cat([bold, bold.mean(dim=0).repeat(self.num_timepoints - T, 1)])
             T = len(bold)
 
         # Create sliding windows with non-overlapping stride

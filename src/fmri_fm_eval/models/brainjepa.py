@@ -2,8 +2,10 @@
 Brain-JEPA model wrapper
 """
 
+import math
 import urllib.request
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
 import torch
@@ -85,6 +87,7 @@ class BrainJEPATransform:
         target_tr: float = 2.0,
         use_normalization: bool = True,
         coord_normalize: bool = False,
+        pad_mode: Literal["mean", "tile"] = "mean",
     ):
         """
         Args:
@@ -92,11 +95,13 @@ class BrainJEPATransform:
             target_tr: Target repetition time in seconds.
             use_normalization: Apply global mean/std normalization.
             coord_normalize: z-score each coordinate time series independently
+            pad_mode: how to pad input if too short
         """
         self.num_frames = num_frames
         self.target_tr = target_tr
         self.use_normalization = use_normalization
         self.coord_normalize = coord_normalize
+        self.pad_mode = pad_mode
 
     def __call__(self, sample: dict[str, Tensor]) -> dict[str, Tensor]:
         bold = sample["bold"]  # (T, D) - normalized per-ROI
@@ -125,12 +130,15 @@ class BrainJEPATransform:
 
         T, D = bold.shape
 
-        # Pad with ROI mean if too short at the end of the time series
+        # Pad with mean or tile if too short
         if T < self.num_frames:
-            roi_mean = bold.mean(dim=0)  # (D,)
-            pad_size = self.num_frames - T
-            padding = roi_mean.unsqueeze(0).repeat(pad_size, 1)  # (pad_size, D)
-            bold = torch.cat([bold, padding], dim=0)  # (num_frames, D)
+            if self.pad_mode == "tile":
+                bold = torch.tile(bold, (math.ceil(self.num_frames / T), 1))
+                bold = bold[: self.num_frames]
+            else:
+                bold = torch.cat([bold, bold.mean(dim=0).repeat(self.num_frames - T, 1)])
+            T = len(bold)
+
         # Clip if too long
         elif T > self.num_frames:
             bold = bold[: self.num_frames]
