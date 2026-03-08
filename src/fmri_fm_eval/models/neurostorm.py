@@ -37,7 +37,11 @@ NEUROSTORM_VARIANTS = {
 def fetch_neurostorm_checkpoint(variant: str) -> Path:
     repo_id = "zxcvb20001/NeuroSTORM"
     filename = NEUROSTORM_VARIANTS[variant]
-    return Path(hf_hub_download(repo_id=repo_id, filename=filename))
+    return Path(
+        hf_hub_download(
+            repo_id=repo_id, filename=filename, revision="e96ad7bcbf393d9e4c655f3064a5e42b89ca1664"
+        )
+    )
 
 
 # Dummy datamodule to initialize LitClassifier
