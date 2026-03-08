@@ -84,16 +84,19 @@ class BrainJEPATransform:
         num_frames: int = 160,
         target_tr: float = 2.0,
         use_normalization: bool = True,
+        coord_normalize: bool = False,
     ):
         """
         Args:
             num_frames: Number of output frames after temporal sampling.
             target_tr: Target repetition time in seconds.
             use_normalization: Apply global mean/std normalization.
+            coord_normalize: z-score each coordinate time series independently
         """
         self.num_frames = num_frames
         self.target_tr = target_tr
         self.use_normalization = use_normalization
+        self.coord_normalize = coord_normalize
 
     def __call__(self, sample: dict[str, Tensor]) -> dict[str, Tensor]:
         bold = sample["bold"]  # (T, D) - normalized per-ROI
@@ -102,7 +105,8 @@ class BrainJEPATransform:
         tr = sample["tr"]  # float - repetition time
 
         # Unnormalize BOLD data
-        bold = bold * std + mean
+        if not self.coord_normalize:
+            bold = bold * std + mean
 
         # Optional global normalization (Brain-JEPA style)
         # Normalization comes first in preprocessing pipeline
@@ -235,6 +239,7 @@ def load_brain_jepa_checkpoint(encoder: nn.Module, ckpt_path: str | Path) -> Non
 @register_model
 def brain_jepa_vitb_ep300(
     attn_mode: str = "sdpa",
+    **kwargs,
 ) -> tuple[BrainJEPATransform, BrainJEPAModelWrapper]:
     """Create Brain-JEPA model and transform. Auto-downloads files if paths are None."""
     # Match the pretrained checkpoint
@@ -263,6 +268,6 @@ def brain_jepa_vitb_ep300(
     # Create wrapper
     model = BrainJEPAModelWrapper(encoder)
 
-    transform = BrainJEPATransform(num_frames=crop_size[1], target_tr=target_tr)
+    transform = BrainJEPATransform(num_frames=crop_size[1], target_tr=target_tr, **kwargs)
 
     return transform, model

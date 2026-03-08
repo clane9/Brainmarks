@@ -79,6 +79,7 @@ class BrainLMTransform:
         target_tr: float = DEFAULT_TR,
         max_val_to_scale: float = DEFAULT_MAX_VAL_TO_SCALE,
         repeat_channels: bool = True,
+        coord_normalize: bool = False,
     ):
         """
         Args:
@@ -87,11 +88,13 @@ class BrainLMTransform:
             max_val_to_scale: Max value for scaling - DATASET-SPECIFIC!
                               Default 5.6430855 is for RobustScaler normalized data.
                               Will be different for z-score normalized data.
+            coord_normalize: z-score each coordinate time series independently
         """
         self.num_timepoints = num_timepoints
         self.target_tr = target_tr
         self.max_val_to_scale = max_val_to_scale
         self.repeat_channels = repeat_channels
+        self.coord_normalize = coord_normalize
 
         # Load voxel reordering indices from coords dataset
         coords_ds = load_a424_coords()  # (424, 4), cols [Index, X, Y, Z]
@@ -113,7 +116,8 @@ class BrainLMTransform:
         tr = sample["tr"]  # float - repetition time
 
         # Convert z-scored data back to raw signal
-        bold = bold * std + mean
+        if not self.coord_normalize:
+            bold = bold * std + mean
 
         # Per-ROI robust scaling with stats computed over entire dataset
         # Following BrainLM "Voxelwise_RobustScaler_Normalized_Recording"
@@ -165,7 +169,8 @@ class BrainLMTransform:
             bold = sample["bold"]  # (T, D) - z-score normalized data
             mean = sample["mean"]  # (1, D)
             std = sample["std"]  # (1, D)
-            bold = bold * std + mean
+            if not self.coord_normalize:
+                bold = bold * std + mean
             all_bold.append(bold)
         all_bold = torch.cat(all_bold)
 

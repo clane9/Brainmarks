@@ -116,7 +116,9 @@ class NeuroStormTransform:
     6. reshape to expected shape (C, H, W, D, T)
     """
 
-    def __init__(self):
+    def __init__(self, coord_normalize: bool = False):
+        self.coord_normalize = coord_normalize
+
         # Mask calculation from fmri_fm_eval.readers
         roi_path = tflow.get(
             "MNI152NLin6Asym", desc="brain", resolution=2, suffix="mask", extension="nii.gz"
@@ -149,7 +151,10 @@ class NeuroStormTransform:
 
         """
         # unnormalize
-        bold = sample["bold"] * sample["std"] + sample["mean"]
+        if not self.coord_normalize:
+            bold = sample["bold"] * sample["std"] + sample["mean"]
+        else:
+            bold = sample["bold"]
         tr = float(sample["tr"])
 
         # temporal resampling
@@ -227,10 +232,10 @@ def resample_to_target_tr(
 
 
 @register_model
-def neurostorm() -> tuple[NeuroStormTransform, NeuroStormWrapper]:
-    return NeuroStormTransform(), NeuroStormWrapper(variant="0.5")
+def neurostorm(**kwargs) -> tuple[NeuroStormTransform, NeuroStormWrapper]:
+    return NeuroStormTransform(**kwargs), NeuroStormWrapper(variant="0.5")
 
 
 @register_model
-def neurostorm_0p8() -> tuple[NeuroStormTransform, NeuroStormWrapper]:
-    return NeuroStormTransform(), NeuroStormWrapper(variant="0.8")
+def neurostorm_0p8(**kwargs) -> tuple[NeuroStormTransform, NeuroStormWrapper]:
+    return NeuroStormTransform(**kwargs), NeuroStormWrapper(variant="0.8")
