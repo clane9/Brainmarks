@@ -18,3 +18,18 @@ def nsd_cococlip(space: str, **kwargs):
         dataset_dict[split] = dataset
 
     return dataset_dict
+
+
+@register_dataset
+def nsd_cococlip_subj01(space: str, **kwargs):
+    dataset_dict = {}
+    splits = {"train": "train", "testid": "validation", "shared1000": "test"}
+
+    for split, name in splits.items():
+        url = f"{NSD_ROOT}/nsd-cococlip.{space}.arrow/{split}"
+        dataset = load_arrow_dataset(url, **kwargs)
+        dataset = dataset.filter(lambda sub: sub == "subj01", input_columns="sub")
+        dataset = HFDataset(dataset, target_key="category_id")
+        dataset_dict[name] = dataset
+
+    return dataset_dict
