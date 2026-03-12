@@ -6,6 +6,7 @@ spaces=(
     flat
     mni_cortex
     schaefer400_tians3_buckner7
+    mni
 )
 
 # nb, volume data not currently stored locally
@@ -15,18 +16,20 @@ roots=(
     data/NSD
     s3://medarc/fmri-datasets/source/NSD
     s3://medarc/fmri-datasets/source/NSD
+    s3://medarc/fmri-datasets/source/NSD
 )
 
-OUT_ROOT="s3://medarc/fmri-datasets/eval"
+# OUT_ROOT="s3://medarc/fmri-datasets/eval"
+OUT_ROOT="data/arrow"
 
-SPACEIDS="2"
+SPACEIDS="1"
 
 log_path="logs/make_nsd_cococlip_arrow.log"
 
 for ii in $SPACEIDS; do
     space=${spaces[ii]}
     root=${roots[ii]}
-    uv run python scripts/make_nsd_cococlip_arrow.py \
+    uv run --no-sync python scripts/make_nsd_cococlip_arrow.py \
         --space "${space}" \
         --root "${root}" \
         --out-root "${OUT_ROOT}" \

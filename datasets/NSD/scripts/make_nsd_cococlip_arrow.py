@@ -39,34 +39,13 @@ NSD_TR = 1.0
 # clip length
 NUM_FRAMES = 16
 
-# split of subjects and sessions
-# we hold out two subjects for validation and test
-# we also include an in-distribution test set "testid"
-# nb, sessions are 1-indexed in the metadata (from NSD filenames)
-SUB_SES_SPLITS = {
-    "train": [
-        ("subj01", (0, 35)),
-        ("subj02", (0, 35)),
-        ("subj03", (0, 27)),
-        ("subj06", (0, 27)),
-        ("subj07", (0, 35)),
-        ("subj08", (0, 25)),
-    ],
-    "validation": [
-        ("subj04", (0, 30)),
-    ],
-    "test": [
-        ("subj05", (0, 30)),  # nb, subj05 still has 10 more sessions
-    ],
-    "testid": [
-        ("subj01", (35, 40)),
-        ("subj02", (35, 40)),
-        ("subj03", (27, 32)),
-        ("subj06", (27, 32)),
-        ("subj07", (35, 40)),
-        ("subj08", (25, 30)),
-    ],
-}
+SPLITS = [
+    "train",
+    "validation",
+    "test",
+    "testid",
+    "shared1000",
+]
 
 
 def main(args):
@@ -85,25 +64,14 @@ def main(args):
         _logger.info("Output %s exists; exiting.", outdir)
         return
 
-    trial_df = pd.read_parquet(ROOT / "metadata/nsd_trial_metadata.parquet")
-    include_trial_ids = np.load(ROOT / "metadata/nsd_include_trial_ids.npy")
-    trial_df = trial_df.loc[include_trial_ids]
+    meta_df = pd.read_csv(ROOT / "metadata/nsd_cococlip_metadata.csv")
 
     run_splits = {}
-    for split in SUB_SES_SPLITS:
+    for split in SPLITS:
         run_splits[split] = []
-        for sub, (start, end) in SUB_SES_SPLITS[split]:
-            for ses_id in range(start, end):
-                ses = ses_id + 1  # nsd sessions are 1-indexed
-                ses_df = trial_df.query(f"sub == '{sub}' and ses == {ses}")
-                for run in ses_df["run"].unique().tolist():
-                    run_splits[split].append((sub, ses, run))
-        _logger.info(f"{split}: num runs = {len(run_splits[split])}")
-
-    logits = np.load(ROOT / "data/nsd_clip_coco_logits.npy")
-    # nb, targets are shape (n, 80) (excluding background category 0)
-    # so if you're used to classic coco category ids these will be off by 1
-    targets = np.argmax(logits, axis=1)
+        split_df = meta_df.loc[meta_df["split"] == split]
+        for (sub, ses, run), _ in split_df.groupby(["sub", "ses", "run"]):
+            run_splits[split].append((sub, ses, run))
 
     # load the data reader for the target space and look up the data dimension.
     # all readers return a bold data array of shape (n_samples, dim).
@@ -146,8 +114,8 @@ def main(args):
                 gen_kwargs={
                     "runs": runs,
                     "root": root,
-                    "trial_df": trial_df,
-                    "targets": targets,
+                    "meta_df": meta_df,
+                    "split": split,
                     "reader": reader,
                     "is_volume": args.space in readers.VOLUME_SPACES,
                 },
@@ -174,8 +142,8 @@ def generate_samples(
     runs: list[tuple[str, int, int]],
     *,
     root: Path,
-    trial_df: pd.DataFrame,
-    targets: np.ndarray,
+    meta_df: pd.DataFrame,
+    split: str,
     reader: readers.Reader,
     is_volume: bool = False,
 ):
@@ -183,14 +151,15 @@ def generate_samples(
         series = reader(fullpath)
         series, mean, std = nisc.scale(series)
 
-        run_df = trial_df.query(f"sub == '{sub}' and ses == {ses} and run == {run}")
+        run_df = meta_df.query(
+            f"sub == '{sub}' and ses == {ses} and run == {run} and split == '{split}'"
+        )
         for _, event in run_df.iterrows():
             start = int(event["onset"] / NSD_TR)
             end = start + NUM_FRAMES
             if end > len(series):
                 continue
             clip = series[start:end]
-            target = targets[event["nsd_id"]]
 
             sample = {
                 "sub": sub,
@@ -198,7 +167,7 @@ def generate_samples(
                 "run": run,
                 "trial_id": event["trial_id"],
                 "nsd_id": event["nsd_id"],
-                "category_id": target,
+                "category_id": event["category_id"],
                 "path": str(path),
                 "start": start,
                 "end": end,
@@ -237,8 +206,8 @@ def prefetch(
             futures = [executor.submit(fn, run_tuple) for run_tuple in runs]
 
             for future in futures:
-                path, fullpath = future.result()
-                yield path, fullpath
+                run_tuple, path, fullpath = future.result()
+                yield run_tuple, path, fullpath
 
                 if str(fullpath).startswith(tmpdir):
                     fullpath.unlink()
