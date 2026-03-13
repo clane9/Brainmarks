@@ -1,8 +1,7 @@
 # This source code is licensed under the Apache License, Version 2.0
 #
 # References:
-# deit: https://github.com/facebookresearch/deit/blob/main/main.py
-# capi: https://github.com/facebookresearch/capi/blob/main/eval_classification.py
+# main_probe.py: adapted for LoRA fine-tuning with peft
 
 import argparse
 import datetime
@@ -10,31 +9,28 @@ import json
 import importlib.metadata
 import math
 import time
-from collections import defaultdict
 from functools import partial
-from itertools import product
 from pathlib import Path
 from typing import Iterable, Sequence
 
 import numpy as np
 import pandas as pd
 import sklearn.metrics
-import sklearn.utils
 import torch
 import torch.nn as nn
 import wandb
 from cloudpathlib import S3Path
 from omegaconf import DictConfig, OmegaConf
+from peft import LoraConfig, get_peft_model, get_peft_model_state_dict, set_peft_model_state_dict
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 import fmri_fm_eval.utils as ut
-from fmri_fm_eval.classifiers import ClassifierGrid, create_classifier, list_classififiers
+from fmri_fm_eval.classifiers import create_classifier, list_classififiers
 from fmri_fm_eval.datasets.base import HFDataset
 from fmri_fm_eval.datasets.registry import create_dataset, list_datasets
 from fmri_fm_eval.models.registry import create_model, list_models
 
-DEFAULT_CONFIG = Path(__file__).parent / "config/default_probe.yaml"
-
+DEFAULT_CONFIG = Path(__file__).parent / "config/default_finetune.yaml"
 
 METRICS = {
     "acc": sklearn.metrics.accuracy_score,
@@ -45,7 +41,7 @@ METRICS = {
 def main(args: DictConfig):
     # setup
     ut.init_distributed_mode(args)
-    assert not args.distributed, "distributed probe eval not supported"
+    assert not args.distributed, "distributed fine-tune eval not supported"
     device = torch.device(args.device)
     ut.random_seed(args.seed)
 
@@ -84,17 +80,26 @@ def main(args: DictConfig):
 
     ut.setup_for_distributed(log_path=output_dir / "log.txt")
 
-    print("fMRI foundation model probe eval")
+    print("fMRI foundation model fine-tune eval")
     print(f"version: {importlib.metadata.version('fmri-fm-eval')}")
     print(ut.get_sha())
     print(f"cwd: {Path.cwd()}")
     print(f"start: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("config:", OmegaConf.to_yaml(args), sep="\n")
 
-    # backbone model
-    print(f"creating frozen backbone model: {args.model}")
+    # backbone model with LoRA
+    print(f"creating backbone model: {args.model}")
     transform, backbone = create_model(args.model, **(args.model_kwargs or {}))
-    backbone.requires_grad_(False)
+    print(f"applying LoRA (r={args.lora.r}, alpha={args.lora.lora_alpha})")
+    lora_cfg = LoraConfig(
+        r=args.lora.r,
+        lora_alpha=args.lora.lora_alpha,
+        lora_dropout=args.lora.lora_dropout,
+        target_modules=args.lora.target_modules,
+        exclude_modules=args.lora.get("exclude_modules"),
+    )
+    backbone = get_peft_model(backbone, lora_cfg)
+    backbone.print_trainable_parameters()
     backbone.to(device)
     print(f"backbone:\n{backbone}")
 
@@ -148,19 +153,26 @@ def main(args: DictConfig):
         )
     val_loader = eval_loaders_dict["validation"]
 
-    # prediction heads
+    # classifier head
     print("running backbone on example batch to get embedding dim")
     embed_dim = get_embedding_dim(args, backbone, train_dataset, device)
     print(f"embedding feature dim ({args.representation}): {embed_dim}")
 
-    print("initializing sweep of classifier heads")
-    classifiers, param_groups = make_classifiers(args, embed_dim)
-    model = ClassifierGrid(backbone, args.representation, classifiers)
+    print(f"creating classifier head: {args.classifier}")
+    classifier = create_classifier(
+        args.classifier,
+        in_dim=embed_dim,
+        out_dim=args.num_classes,
+        **(args.classifier_kwargs or {}),
+    )
+
+    model = FineTuneModel(backbone, args.representation, classifier)
     model.to(device)
-    print(f"classifiers:\n{model.classifiers}")
-    num_params = sum(p.numel() for p in model.classifiers.parameters())
-    num_params_train = sum(p.numel() for p in model.classifiers.parameters() if p.requires_grad)
-    print(f"classifier params (train): {num_params / 1e6:.1f}M ({num_params_train / 1e6:.1f}M)")
+
+    num_backbone_params = sum(p.numel() for p in backbone.parameters() if p.requires_grad)
+    num_head_params = sum(p.numel() for p in classifier.parameters())
+    print(f"trainable backbone (LoRA) params: {num_backbone_params / 1e6:.3f}M")
+    print(f"classifier head params: {num_head_params / 1e6:.3f}M")
 
     # optimizer
     print("setting up optimizer")
@@ -170,13 +182,14 @@ def main(args: DictConfig):
         f"{args.batch_size} bs per gpu x {args.accum_iter} accum"
     )
 
-    print(f"lr: {args.lr:.2e}")
+    param_groups = make_param_groups(backbone, classifier, args)
+    print(f"backbone lr: {args.lr:.2e}")
+    print(f"head lr: {args.lr * args.head_lr_scale:.2e}")
     ut.update_lr(param_groups, args.lr)
     ut.update_wd(param_groups, args.weight_decay)
     optimizer = torch.optim.AdamW(param_groups)
 
-    # we use a fixed epoch length determined by steps_per_epoch so that the training
-    # schedule is consistent across datasets with varying numbers of samples.
+    # lr schedule
     if not args.steps_per_epoch:
         args.steps_per_epoch = len(train_loader) // args.accum_iter
     total_steps = args.epochs * args.steps_per_epoch
@@ -187,21 +200,11 @@ def main(args: DictConfig):
     print(f"warmup: epochs = {args.warmup_epochs} (steps = {warmup_steps})")
 
     # load checkpoint/resume training
-    # checkpoint only includes classifiers since backbone is frozen to save space
-    ckpt_meta = load_model(args, model.classifiers, optimizer)
+    ckpt_meta = load_model(args, model, optimizer)
     best_score = ckpt_meta["best_score"] if ckpt_meta else float("-inf")
 
-    # freeze classifiers that have already diverged after resume
-    if args.start_epoch > 0:
-        for ii, clf in enumerate(model.classifiers):
-            hparam = model.hparams[ii]
-            clf_norm = torch.stack([p.norm() for p in clf.parameters()]).norm().item()
-            if clf_norm == 0:
-                print(f"freezing diverged classifier {ii} {hparam}")
-                clf.requires_grad_(False)
-
     # training loss
-    criterion = nn.CrossEntropyLoss(reduction="none")
+    criterion = nn.CrossEntropyLoss()
 
     print(f"start training for {args.epochs} epochs")
     log_wandb = args.wandb and ut.is_main_process()
@@ -218,7 +221,7 @@ def main(args: DictConfig):
             device,
         )
 
-        val_stats, _, _ = evaluate(
+        val_stats = evaluate(
             args,
             model,
             criterion,
@@ -231,33 +234,14 @@ def main(args: DictConfig):
         if log_wandb:
             wandb.log(val_stats, (epoch + 1) * args.steps_per_epoch)
 
-        hparam_id, hparam, cv_score = get_best_hparams(args, model, val_stats)
-        hparam_fmt = format_hparam(hparam_id, hparam)
-        hparam_scores = {
-            metric: val_stats[f"validation/{metric}_{hparam_fmt}"]
+        cv_score = get_cv_score(args, val_stats)
+        val_scores_fmt = "  ".join(
+            f"{metric}: {val_stats[f'validation/{metric}']:.3f}"
             for metric in ["loss"] + args.metrics
-        }
-        hparam_scores_fmt = "  ".join(
-            f"{metric}: {score:.3f}" for metric, score in hparam_scores.items()
         )
-        print(
-            f"cv: [{epoch}]  best hparam: {hparam} ({hparam_id:03d}) ('{hparam_fmt}')  "
-            f"{hparam_scores_fmt}"
-        )
+        print(f"cv: [{epoch}]  {val_scores_fmt}")
 
-        best_stats = {
-            "id_best": hparam_id,
-            "lr_best": hparam[0] * args.lr,
-            "wd_best": hparam[1] * args.weight_decay,
-            "train/loss_best": train_stats[f"train/loss_{hparam_fmt}"],
-        }
-        for metric, score in hparam_scores.items():
-            best_stats[f"validation/{metric}_best"] = score
-
-        if log_wandb:
-            wandb.log(best_stats, (epoch + 1) * args.steps_per_epoch)
-
-        merged_stats = {"epoch": epoch, **train_stats, **val_stats, **best_stats}
+        merged_stats = {"epoch": epoch, **train_stats, **val_stats}
         with (output_dir / "train_log.json").open("a") as f:
             print(json.dumps(merged_stats), file=f)
 
@@ -266,8 +250,6 @@ def main(args: DictConfig):
             best_score = cv_score
         meta = {
             "score": cv_score,
-            "hparam": hparam,
-            "hparam_id": hparam_id,
             "epoch": epoch,
             "is_best": is_best,
             "best_score": best_score,
@@ -276,7 +258,7 @@ def main(args: DictConfig):
         save_model(
             args,
             epoch,
-            model.classifiers,
+            model,
             optimizer,
             meta=meta,
             is_best=is_best,
@@ -303,6 +285,20 @@ def main(args: DictConfig):
         ut.rsync(args.remote_dir, output_dir)
 
 
+class FineTuneModel(nn.Module):
+    def __init__(self, backbone: nn.Module, representation: str, classifier: nn.Module):
+        super().__init__()
+        self.backbone = backbone
+        self.representation = representation
+        self.classifier = classifier
+
+    def forward(self, batch):
+        cls_embeds, reg_embeds, patch_embeds = self.backbone(batch)
+        all_embeds = {"cls": cls_embeds, "reg": reg_embeds, "patch": patch_embeds}
+        embeds = all_embeds[self.representation]
+        return self.classifier(embeds)
+
+
 @torch.inference_mode()
 def get_embedding_dim(
     args: DictConfig,
@@ -321,48 +317,34 @@ def get_embedding_dim(
     return embed_dim
 
 
-def make_classifiers(args: DictConfig, embed_dim: int):
-    # create sweep of classifier heads with varying hparams
-    all_classifiers = {}
-    param_groups = {}
+def make_param_groups(backbone: nn.Module, classifier: nn.Module, args: DictConfig):
+    head_lr_multiplier = args.head_lr_scale
+    groups = {}
 
-    clf_fn = partial(
-        create_classifier,
-        name=args.classifier,
-        in_dim=embed_dim,
-        out_dim=args.num_classes,
-        **(args.classifier_kwargs or {}),
-    )
+    for name, param in backbone.named_parameters():
+        if not param.requires_grad:
+            continue
+        wd_multiplier = 0.0 if (name.endswith(".bias") or "norm" in name) else 1.0
+        key = ("backbone", 1.0, wd_multiplier)
+        if key not in groups:
+            groups[key] = {"params": [], "lr_multiplier": 1.0, "wd_multiplier": wd_multiplier}
+        groups[key]["params"].append(param)
 
-    # all classifiers get same init
-    init_state = None
+    for name, param in classifier.named_parameters():
+        if not param.requires_grad:
+            continue
+        wd_multiplier = 0.0 if (name.endswith(".bias") or "norm" in name) else 1.0
+        key = ("head", head_lr_multiplier, wd_multiplier)
+        if key not in groups:
+            groups[key] = {
+                "params": [],
+                "lr_multiplier": head_lr_multiplier,
+                "wd_multiplier": wd_multiplier,
+            }
+        groups[key]["params"].append(param)
 
-    for lr_multiplier, wd_multiplier in product(args.lr_scale_grid, args.wd_scale_grid):
-        clf = clf_fn()
-        if init_state is None:
-            init_state = clf.state_dict()
-        else:
-            clf.load_state_dict(init_state)
-
-        all_classifiers[(lr_multiplier, wd_multiplier)] = clf
-
-        for name, param in clf.named_parameters():
-            param_wd_multiplier = wd_multiplier
-
-            if name.endswith(".bias") or "norm" in name:
-                param_wd_multiplier = 0.0
-
-            key = (lr_multiplier, param_wd_multiplier)
-            if key not in param_groups:
-                param_groups[key] = {
-                    "params": [],
-                    "lr_multiplier": lr_multiplier,
-                    "wd_multiplier": param_wd_multiplier,
-                }
-            param_groups[key]["params"].append(param)
-
-    param_groups = list(param_groups.values())
-    return all_classifiers, param_groups
+    param_groups = list(groups.values())
+    return param_groups
 
 
 def make_lr_schedule(base_lr: float, total_steps: int, warmup_steps: int, no_decay: bool = False):
@@ -380,7 +362,7 @@ def make_lr_schedule(base_lr: float, total_steps: int, warmup_steps: int, no_dec
 
 def train_one_epoch(
     args: DictConfig,
-    model: ClassifierGrid,
+    model: FineTuneModel,
     criterion: nn.Module,
     data_loader: Iterable,
     optimizer: torch.optim.Optimizer,
@@ -389,7 +371,6 @@ def train_one_epoch(
     device: torch.device,
 ):
     model.train()
-    model.backbone.eval()
     use_cuda = device.type == "cuda"
     log_wandb = args.wandb and ut.is_main_process()
     print_freq = args.get("print_freq", 20) if not args.debug else 1
@@ -398,9 +379,6 @@ def train_one_epoch(
     metric_logger = ut.MetricLogger(delimiter="  ")
     metric_logger.add_meter("lr", ut.SmoothedValue(window_size=1, fmt="{value:.6f}"))
     header = f"train: [{epoch}]"
-    all_meters = defaultdict(ut.SmoothedValue)
-
-    num_classifiers = len(model.classifiers)
 
     data_loader = ut.infinite_data_wrapper(data_loader)
     optimizer.zero_grad()
@@ -418,99 +396,46 @@ def train_one_epoch(
 
         target = batch.pop("target")
 
-        # expand last dimension of target to match prediction
-        # note that the num_classifiers dimension has to go at the end bc this is
-        # what nn.CrossEntropyLoss expects.
-        expand_shape = target.ndim * (-1,) + (num_classifiers,)
-        target = target.unsqueeze(-1).expand(*expand_shape)
-
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=args.amp):
             pred = model(batch)
-            # [batch, num_classifiers] or [batch, num_targets, num_classifiers]
-            all_loss = criterion(pred, target)
-            all_loss = all_loss.reshape(-1, num_classifiers).mean(dim=0)
-            loss = all_loss.mean()
+            loss = criterion(pred, target)
 
-        loss_value = loss.item()
-        all_loss_values = all_loss.tolist()
+        if need_update:
+            loss_value = loss.item()
+            if not math.isfinite(loss_value):
+                raise RuntimeError(f"Loss is {loss_value}, stopping training")
 
-        if not math.isfinite(loss_value):
-            raise RuntimeError(f"Loss is {loss_value}, stopping training")
-
-        # nb, no loss scaler. can add if needed.
         (loss / args.accum_iter).backward()
 
         if need_update:
-            # grad clip per classifier separately
-            all_grad = []
-            for clf in model.classifiers:
-                grad = nn.utils.clip_grad_norm_(clf.parameters(), args.clip_grad)
-                all_grad.append(grad.cpu())
-            all_grad = torch.stack(all_grad)
-            total_grad = all_grad.norm()
+            grad = nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
             optimizer.step()
             optimizer.zero_grad()
-
-            all_grad_values = all_grad.tolist()
 
         if need_update:
             log_metric_dict = {
                 "lr": lr,
                 "loss": loss_value,
-                "grad": total_grad.item(),
+                "grad": grad.item(),
             }
             metric_logger.update(**log_metric_dict)
 
-            all_metric_dict = {}
-            all_metric_dict.update(
-                {
-                    f"loss_{format_hparam(ii, hparam)}": all_loss_values[ii]
-                    for ii, hparam in enumerate(model.hparams)
-                }
-            )
-            all_metric_dict.update(
-                {
-                    f"grad_{format_hparam(ii, hparam)}": all_grad_values[ii]
-                    for ii, hparam in enumerate(model.hparams)
-                }
-            )
-
-            for k, v in all_metric_dict.items():
-                all_meters[k].update(v)
-
             if log_wandb:
                 wandb.log({f"train/{k}": v for k, v in log_metric_dict.items()}, global_step)
-                wandb.log({f"train/{k}": v for k, v in all_metric_dict.items()}, global_step)
 
-        # freeze classifiers whose loss exceeds the divergence threshold
-        if need_update:
-            diverge_threshold = 20 * math.log(args.num_classes)
-            for ii, clf in enumerate(model.classifiers):
-                if all_loss_values[ii] > diverge_threshold:
-                    hparam = model.hparams[ii]
-                    print(
-                        f"WARNING: classifier {ii} {hparam} diverged "
-                        f"(loss={all_loss_values[ii]:.2f} > {diverge_threshold:.2f}) "
-                        f"at step {global_step}. Freezing."
-                    )
-                    clf.requires_grad_(False)
-                    for p in clf.parameters():
-                        p.data.zero_()
-
-        if use_cuda:
+        if need_update and use_cuda:
             torch.cuda.synchronize()
 
     print(f"{header} Summary:", metric_logger)
 
     stats = {f"train/{k}": meter.global_avg for k, meter in metric_logger.meters.items()}
-    stats.update({f"train/{k}": meter.global_avg for k, meter in all_meters.items()})
     return stats
 
 
 @torch.inference_mode()
 def evaluate(
     args: DictConfig,
-    model: ClassifierGrid,
+    model: FineTuneModel,
     criterion: nn.Module,
     data_loader: Iterable,
     epoch: int,
@@ -527,8 +452,6 @@ def evaluate(
     metric_logger = ut.MetricLogger(delimiter="  ")
     header = f"eval ({eval_name}): [{epoch}]"
 
-    num_classifiers = len(model.classifiers)
-
     logits = []
     targets = []
 
@@ -537,9 +460,6 @@ def evaluate(
     ):
         batch = ut.send_data(batch, device)
         target = batch.pop("target")
-
-        expand_shape = target.ndim * (-1,) + (num_classifiers,)
-        target = target.unsqueeze(-1).expand(*expand_shape)
 
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=args.amp):
             logit = model(batch)
@@ -550,33 +470,26 @@ def evaluate(
         if use_cuda:
             torch.cuda.synchronize()
 
-    # average loss and acc over the full eval dataset
     logits = torch.cat(logits)
     targets = torch.cat(targets)
 
     total_loss = criterion(logits, targets)
-    total_loss = total_loss.reshape(-1, num_classifiers).mean(dim=0).tolist()
-    stats = {
-        f"loss_{format_hparam(ii, hparam)}": total_loss[ii]
-        for ii, hparam in enumerate(model.hparams)
-    }
+    stats = {"loss": total_loss.item()}
 
-    preds = torch.argmax(logits, dim=1).numpy()  # [N, nc]
-    targets = targets[:, 0].numpy()  # drop repeated targets [N]
+    preds = torch.argmax(logits, dim=1).numpy()
+    targets = targets.numpy()
 
     for metric in args.metrics:
         metric_fn = METRICS[metric]
-        for ii, hparam in enumerate(model.hparams):
-            stats[f"{metric}_{format_hparam(ii, hparam)}"] = metric_fn(targets, preds[:, ii])
+        stats[metric] = metric_fn(targets, preds)
 
     stats = {f"{eval_name}/{k}": v for k, v in stats.items()}
-
-    return stats, preds, targets
+    return stats
 
 
 def evaluate_checkpoint(
     args: DictConfig,
-    model: ClassifierGrid,
+    model: FineTuneModel,
     criterion: nn.Module,
     eval_loaders_dict: dict[str, DataLoader],
     device: torch.device,
@@ -587,12 +500,10 @@ def evaluate_checkpoint(
     ckpt_path = output_dir / f"checkpoint-{ckpt_label}.pth"
     print(f"evaluating {ckpt_label} checkpoint: {ckpt_path}")
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-    model.classifiers.load_state_dict(ckpt["model"])
+    set_peft_model_state_dict(model.backbone, ckpt["backbone"])
+    model.classifier.load_state_dict(ckpt["classifier"])
     ckpt_meta = ckpt["meta"]
     print(f"eval model info:\n{json.dumps(ckpt_meta)}")
-
-    hparam_id, hparam = ckpt_meta["hparam_id"], ckpt_meta["hparam"]
-    hparam_fmt = format_hparam(hparam_id, hparam)
 
     header = {
         "model": args.model,
@@ -601,21 +512,18 @@ def evaluate_checkpoint(
         "dataset": args.dataset,
         "ckpt": ckpt_label,
         "epoch": ckpt_meta["epoch"],
-        "lr": hparam[0] * args.lr,
-        "wd": hparam[1] * args.weight_decay,
-        "hparam_id": hparam_id,
-        "hparam": json.dumps(hparam),
+        "lr": args.lr,
+        "head_lr": args.lr * args.head_lr_scale,
     }
     eval_stats = {
         f"eval/{ckpt_label}/epoch": header["epoch"],
-        f"eval/{ckpt_label}/id_best": header["hparam_id"],
-        f"eval/{ckpt_label}/lr_best": header["lr"],
-        f"eval/{ckpt_label}/wd_best": header["wd"],
+        f"eval/{ckpt_label}/lr": header["lr"],
+        f"eval/{ckpt_label}/head_lr": header["head_lr"],
     }
     table = []
 
     for split, loader in eval_loaders_dict.items():
-        stats, preds, targets = evaluate(
+        stats = evaluate(
             args,
             model,
             criterion,
@@ -626,19 +534,13 @@ def evaluate_checkpoint(
         )
         record = {**header, "split": split}
 
-        preds = preds[:, hparam_id]
-        bootstrap_result = bootstrap_ci(args, preds, targets)
-
         log_prefix = f"eval/{ckpt_label}/{split}"
-        record["loss"] = eval_stats[f"{log_prefix}/loss"] = stats[f"{split}/loss_{hparam_fmt}"]
+        record["loss"] = eval_stats[f"{log_prefix}/loss"] = stats[f"{split}/loss"]
         for metric in args.metrics:
-            score = stats[f"{split}/{metric}_{hparam_fmt}"]
-            std = bootstrap_result[metric]["std"]
+            score = stats[f"{split}/{metric}"]
             record[metric] = eval_stats[f"{log_prefix}/{metric}"] = score
-            record[f"{metric}_std"] = eval_stats[f"{log_prefix}/{metric}_std"] = std
 
         table.append(record)
-        np.savez(output_dir / f"preds_{ckpt_label}_{split}.npz", preds=preds, targets=targets)
 
     table = pd.DataFrame.from_records(table)
     table.to_csv(output_dir / f"eval_table_{ckpt_label}.csv", index=False)
@@ -659,45 +561,14 @@ def evaluate_checkpoint(
             wandb.log(eval_stats, args.epochs * args.steps_per_epoch)
 
 
-def bootstrap_ci(args: DictConfig, preds: np.ndarray, targets: np.ndarray):
-    random_state = sklearn.utils.check_random_state(args.seed)
-
-    sample_scores = defaultdict(list)
-    for _ in range(500):
-        preds_, targets_ = sklearn.utils.resample(
-            preds, targets, random_state=random_state, stratify=targets
-        )
-        for metric in args.metrics:
-            metric_fn = METRICS[metric]
-            sample_scores[metric].append(metric_fn(targets_, preds_))
-
-    result = {}
-    for metric, values in sample_scores.items():
-        result[metric] = {"mean": np.mean(values), "std": np.std(values)}
-
-    return result
-
-
-def format_hparam(idx: int, hparam: tuple[float, float]) -> str:
-    lr, weight_decay = hparam
-    return f"{idx:03d}_lr{lr:.1e}_wd{weight_decay:.1e}"
-
-
-def get_best_hparams(args: DictConfig, model: ClassifierGrid, stats: dict[str, float]):
+def get_cv_score(args: DictConfig, stats: dict[str, float]):
     metric = args.cv_metric
     if metric.startswith("neg_"):
         sign = -1
         metric = metric[4:]
     else:
         sign = 1
-    scores = [
-        sign * stats[f"validation/{metric}_{format_hparam(ii, hparam)}"]
-        for ii, hparam in enumerate(model.hparams)
-    ]
-    best_id = int(np.argmax(scores))
-    best_hparam = model.hparams[best_id]
-    best_score = scores[best_id]
-    return best_id, best_hparam, best_score
+    return sign * stats[f"validation/{metric}"]
 
 
 def save_model(args, epoch, model, optimizer, meta=None, is_best=None):
@@ -706,7 +577,8 @@ def save_model(args, epoch, model, optimizer, meta=None, is_best=None):
     best_checkpoint_path = output_dir / "checkpoint-best.pth"
 
     to_save = {
-        "model": model.state_dict(),
+        "backbone": get_peft_model_state_dict(model.backbone),
+        "classifier": model.classifier.state_dict(),
         "optimizer": optimizer.state_dict(),
         "args": OmegaConf.to_container(args),
         "epoch": epoch,
@@ -733,7 +605,8 @@ def load_model(args, model, optimizer):
 
     if ckpt_path.exists():
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-        model.load_state_dict(ckpt["model"])
+        set_peft_model_state_dict(model.backbone, ckpt["backbone"])
+        model.classifier.load_state_dict(ckpt["classifier"])
         optimizer.load_state_dict(ckpt["optimizer"])
         args.start_epoch = ckpt["epoch"] + 1
         meta = ckpt["meta"]

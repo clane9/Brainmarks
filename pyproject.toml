@@ -23,6 +23,7 @@ dependencies = [
     "numpy",
     "omegaconf",
     "pandas",
+    "peft",
     "pre-commit",
     "pycortex",
     "pytest",
