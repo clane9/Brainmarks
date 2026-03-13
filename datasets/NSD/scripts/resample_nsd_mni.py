@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import shutil
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -109,7 +110,7 @@ def main(
             out_path.upload_from(local_output)
         else:
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            local_output.rename(out_path)
+            shutil.move(local_output, out_path)
 
         _logger.info("Done: %s", out_path)
 
