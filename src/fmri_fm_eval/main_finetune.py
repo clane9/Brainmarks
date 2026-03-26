@@ -206,9 +206,20 @@ def main(args: DictConfig):
     total_steps = args.epochs * args.steps_per_epoch
     warmup_steps = args.warmup_epochs * args.steps_per_epoch
     no_decay = args.get("no_decay", False)
-    lr_schedule = make_lr_schedule(args.lr, total_steps, warmup_steps, no_decay=no_decay)
+
+    delay_epochs = args.get("delay_epochs", 0)
+    delay_steps = delay_epochs * args.steps_per_epoch
+
+    head_lr_schedule = make_lr_schedule(args.lr, total_steps, warmup_steps, no_decay=no_decay)
+    backbone_lr_schedule = make_lr_schedule(
+        args.lr, total_steps, warmup_steps, delay_steps=delay_steps, no_decay=no_decay
+    )
+    lr_schedules = {"backbone": backbone_lr_schedule, "head": head_lr_schedule}
+
     print(f"full schedule: epochs = {args.epochs} (steps = {total_steps}) (decay = {not no_decay})")
     print(f"warmup: epochs = {args.warmup_epochs} (steps = {warmup_steps})")
+    if delay_steps > 0:
+        print(f"backbone delay: epochs = {delay_epochs} (steps = {delay_steps})")
 
     # load checkpoint/resume training
     ckpt_meta = load_model(args, model, optimizer)
@@ -227,7 +238,7 @@ def main(args: DictConfig):
             criterion,
             train_loader,
             optimizer,
-            lr_schedule,
+            lr_schedules,
             epoch,
             device,
         )
@@ -351,7 +362,12 @@ def make_param_groups(backbone: nn.Module, classifier: nn.Module, args: DictConf
         wd_multiplier = 0.0 if (name.endswith(".bias") or "norm" in name) else 1.0
         key = ("backbone", 1.0, wd_multiplier)
         if key not in groups:
-            groups[key] = {"params": [], "lr_multiplier": 1.0, "wd_multiplier": wd_multiplier}
+            groups[key] = {
+                "params": [],
+                "name": "backbone",
+                "lr_multiplier": 1.0,
+                "wd_multiplier": wd_multiplier,
+            }
         groups[key]["params"].append(param)
 
     for name, param in classifier.named_parameters():
@@ -362,6 +378,7 @@ def make_param_groups(backbone: nn.Module, classifier: nn.Module, args: DictConf
         if key not in groups:
             groups[key] = {
                 "params": [],
+                "name": "head",
                 "lr_multiplier": head_lr_multiplier,
                 "wd_multiplier": wd_multiplier,
             }
@@ -371,15 +388,23 @@ def make_param_groups(backbone: nn.Module, classifier: nn.Module, args: DictConf
     return param_groups
 
 
-def make_lr_schedule(base_lr: float, total_steps: int, warmup_steps: int, no_decay: bool = False):
+def make_lr_schedule(
+    base_lr: float,
+    total_steps: int,
+    warmup_steps: int,
+    no_decay: bool = False,
+    delay_steps: int = 0,
+):
+    delay = np.zeros(delay_steps)
+    active_steps = max(total_steps - delay_steps, 0)
     warmup = np.linspace(0.0, 1.0, warmup_steps)
-    decay_steps = max(total_steps - warmup_steps, 0)
+    decay_steps = max(active_steps - warmup_steps, 0)
     if not no_decay:
         decay = np.cos(np.linspace(0, np.pi, decay_steps))
         decay = (decay + 1) / 2
     else:
         decay = np.ones(decay_steps)
-    lr_schedule = base_lr * np.concatenate([warmup, decay])
+    lr_schedule = base_lr * np.concatenate([delay, warmup, decay])
     lr_schedule = lr_schedule[:total_steps]
     return lr_schedule
 
@@ -390,7 +415,7 @@ def train_one_epoch(
     criterion: nn.Module,
     data_loader: Iterable,
     optimizer: torch.optim.Optimizer,
-    lr_schedule: Sequence[float],
+    lr_schedules: dict[str, Sequence[float]],
     epoch: int,
     device: torch.device,
 ):
@@ -415,8 +440,11 @@ def train_one_epoch(
         global_step = epoch * args.steps_per_epoch + (batch_idx + 1) // args.accum_iter
         need_update = (batch_idx + 1) % args.accum_iter == 0
         if need_update:
-            lr = lr_schedule[global_step - 1]
-            ut.update_lr(optimizer.param_groups, lr)
+            for group in optimizer.param_groups:
+                schedule = lr_schedules[group["name"]]
+                group["lr"] = schedule[global_step - 1] * group["lr_multiplier"]
+            lr = lr_schedules["backbone"][global_step - 1]
+            head_lr = lr_schedules["head"][global_step - 1]
 
         target = batch.pop("target")
 
@@ -439,6 +467,7 @@ def train_one_epoch(
         if need_update:
             log_metric_dict = {
                 "lr": lr,
+                "head_lr": head_lr,
                 "loss": loss_value,
                 "grad": grad.item(),
             }

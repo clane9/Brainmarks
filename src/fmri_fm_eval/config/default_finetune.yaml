@@ -67,6 +67,8 @@ accum_iter: 4
 lr: 1e-4
 # classifier head lr = lr * head_lr_scale
 head_lr_scale: 10.0
+# number of epochs to delay backbone training (backbone lr = 0).
+delay_epochs: 0
 # linear warmup
 warmup_epochs: 5
 # cosine decay by default
