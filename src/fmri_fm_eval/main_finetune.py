@@ -8,6 +8,7 @@ import datetime
 import json
 import importlib.metadata
 import math
+import re
 import time
 from functools import partial
 from pathlib import Path
@@ -21,7 +22,7 @@ import torch.nn as nn
 import wandb
 from cloudpathlib import S3Path
 from omegaconf import DictConfig, OmegaConf
-from peft import LoraConfig, get_peft_model, get_peft_model_state_dict, set_peft_model_state_dict
+from peft import LoraConfig, get_peft_model
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 import fmri_fm_eval.utils as ut
@@ -87,19 +88,29 @@ def main(args: DictConfig):
     print(f"start: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("config:", OmegaConf.to_yaml(args), sep="\n")
 
-    # backbone model with LoRA
+    # backbone model
     print(f"creating backbone model: {args.model}")
     transform, backbone = create_model(args.model, **(args.model_kwargs or {}))
-    print(f"applying LoRA (r={args.lora.r}, alpha={args.lora.lora_alpha})")
-    lora_cfg = LoraConfig(
-        r=args.lora.r,
-        lora_alpha=args.lora.lora_alpha,
-        lora_dropout=args.lora.lora_dropout,
-        target_modules=args.lora.target_modules,
-        exclude_modules=args.lora.get("exclude_modules"),
-    )
-    backbone = get_peft_model(backbone, lora_cfg)
-    backbone.print_trainable_parameters()
+
+    if args.finetune_mode == "lora":
+        print(f"applying LoRA (r={args.lora.r}, alpha={args.lora.lora_alpha})")
+        lora_cfg = LoraConfig(
+            r=args.lora.r,
+            lora_alpha=args.lora.lora_alpha,
+            lora_dropout=args.lora.lora_dropout,
+            target_modules=args.lora.target_modules,
+            exclude_modules=args.lora.get("exclude_modules"),
+        )
+        backbone = get_peft_model(backbone, lora_cfg)
+        backbone.print_trainable_parameters()
+    elif args.finetune_mode == "full_ft":
+        print("full fine-tuning: unfreezing all backbone parameters")
+        backbone.requires_grad_(True)
+        if args.freeze_layers:
+            freeze_backbone_params(backbone, args.freeze_layers)
+    else:
+        raise ValueError(f"unknown finetune_mode: {args.finetune_mode}")
+
     backbone.to(device)
     print(f"backbone:\n{backbone}")
 
@@ -171,7 +182,7 @@ def main(args: DictConfig):
 
     num_backbone_params = sum(p.numel() for p in backbone.parameters() if p.requires_grad)
     num_head_params = sum(p.numel() for p in classifier.parameters())
-    print(f"trainable backbone (LoRA) params: {num_backbone_params / 1e6:.3f}M")
+    print(f"trainable backbone params: {num_backbone_params / 1e6:.3f}M")
     print(f"classifier head params: {num_head_params / 1e6:.3f}M")
 
     # optimizer
@@ -315,6 +326,19 @@ def get_embedding_dim(
     embeds = all_embeds[args.representation]
     embed_dim = embeds.shape[-1]
     return embed_dim
+
+
+def freeze_backbone_params(backbone: nn.Module, patterns: list[str]):
+    """Freeze backbone params whose names match any of the given regex patterns."""
+    compiled = [re.compile(p) for p in patterns]
+    frozen = []
+    for name, param in backbone.named_parameters():
+        if any(pat.search(name) for pat in compiled):
+            param.requires_grad_(False)
+            frozen.append(name)
+    total = sum(1 for _ in backbone.parameters())
+    print(f"froze {len(frozen)}/{total} backbone params matching {patterns}")
+    print("frozen params:\n  " + "\n  ".join(frozen[:10]))
 
 
 def make_param_groups(backbone: nn.Module, classifier: nn.Module, args: DictConfig):
@@ -500,7 +524,7 @@ def evaluate_checkpoint(
     ckpt_path = output_dir / f"checkpoint-{ckpt_label}.pth"
     print(f"evaluating {ckpt_label} checkpoint: {ckpt_path}")
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-    set_peft_model_state_dict(model.backbone, ckpt["backbone"])
+    model.backbone.load_state_dict(ckpt["backbone"], strict=False)
     model.classifier.load_state_dict(ckpt["classifier"])
     ckpt_meta = ckpt["meta"]
     print(f"eval model info:\n{json.dumps(ckpt_meta)}")
@@ -576,8 +600,10 @@ def save_model(args, epoch, model, optimizer, meta=None, is_best=None):
     last_checkpoint_path = output_dir / "checkpoint-last.pth"
     best_checkpoint_path = output_dir / "checkpoint-best.pth"
 
+    trainable_names = {n for n, p in model.backbone.named_parameters() if p.requires_grad}
+    backbone_state = {k: v for k, v in model.backbone.state_dict().items() if k in trainable_names}
     to_save = {
-        "backbone": get_peft_model_state_dict(model.backbone),
+        "backbone": backbone_state,
         "classifier": model.classifier.state_dict(),
         "optimizer": optimizer.state_dict(),
         "args": OmegaConf.to_container(args),
@@ -605,7 +631,7 @@ def load_model(args, model, optimizer):
 
     if ckpt_path.exists():
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-        set_peft_model_state_dict(model.backbone, ckpt["backbone"])
+        model.backbone.load_state_dict(ckpt["backbone"], strict=False)
         model.classifier.load_state_dict(ckpt["classifier"])
         optimizer.load_state_dict(ckpt["optimizer"])
         args.start_epoch = ckpt["epoch"] + 1

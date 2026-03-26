@@ -29,7 +29,10 @@ classifier_kwargs:
   # Batch norm for linear classifier
   norm: true
 
-# LoRA configuration
+# Fine-tuning mode: "lora" or "full_ft"
+finetune_mode: lora
+
+# LoRA configuration (only used when finetune_mode: lora)
 lora:
   r: 8
   lora_alpha: 16
@@ -38,6 +41,12 @@ lora:
   # Can also be a regex pattern e.g. ".*attn.*" for attention-only.
   target_modules: "all-linear"
   exclude_modules: null
+
+full_ft:
+  # List of regex patterns matched against parameter names to freeze.
+  # If null, no layers are frozen.
+  # Example: ["blocks\\.[0-7]\\."] freezes the first 8 transformer blocks.
+  freeze_layers: null
 
 # Data loader
 num_workers: 8
