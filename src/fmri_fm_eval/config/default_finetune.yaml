@@ -45,7 +45,6 @@ lora:
 full_ft:
   # List of regex patterns matched against parameter names to freeze.
   # If null, no layers are frozen.
-  # Example: ["blocks\\.[0-7]\\."] freezes the first 8 transformer blocks.
   freeze_layers: null
 
 # Data loader

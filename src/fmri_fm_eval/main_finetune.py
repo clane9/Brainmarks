@@ -102,14 +102,21 @@ def main(args: DictConfig):
             exclude_modules=args.lora.get("exclude_modules"),
         )
         backbone = get_peft_model(backbone, lora_cfg)
-        backbone.print_trainable_parameters()
     elif args.finetune_mode == "full_ft":
         print("full fine-tuning: unfreezing all backbone parameters")
         backbone.requires_grad_(True)
-        if args.freeze_layers:
-            freeze_backbone_params(backbone, args.freeze_layers)
+        if args.full_ft.freeze_layers:
+            freeze_backbone_params(backbone, args.full_ft.freeze_layers)
     else:
         raise ValueError(f"unknown finetune_mode: {args.finetune_mode}")
+
+    trainable_params = sum(p.numel() for p in backbone.parameters() if p.requires_grad)
+    all_param = sum(p.numel() for p in backbone.parameters())
+    print(
+        f"trainable params: {trainable_params:,d} || "
+        f"all params: {all_param:,d} || "
+        f"trainable%: {100 * trainable_params / all_param:.4f}"
+    )
 
     backbone.to(device)
     print(f"backbone:\n{backbone}")
@@ -343,13 +350,17 @@ def freeze_backbone_params(backbone: nn.Module, patterns: list[str]):
     """Freeze backbone params whose names match any of the given regex patterns."""
     compiled = [re.compile(p) for p in patterns]
     frozen = []
+    unfrozen = []
     for name, param in backbone.named_parameters():
         if any(pat.search(name) for pat in compiled):
             param.requires_grad_(False)
             frozen.append(name)
+        elif param.requires_grad:
+            unfrozen.append(name)
     total = sum(1 for _ in backbone.parameters())
     print(f"froze {len(frozen)}/{total} backbone params matching {patterns}")
-    print("frozen params:\n  " + "\n  ".join(frozen[:10]))
+    print("frozen:\n  " + "\n  ".join(frozen))
+    print("unfrozen:\n  " + "\n  ".join(unfrozen))
 
 
 def make_param_groups(backbone: nn.Module, classifier: nn.Module, args: DictConfig):
@@ -427,6 +438,7 @@ def train_one_epoch(
 
     metric_logger = ut.MetricLogger(delimiter="  ")
     metric_logger.add_meter("lr", ut.SmoothedValue(window_size=1, fmt="{value:.6f}"))
+    metric_logger.add_meter("head_lr", ut.SmoothedValue(window_size=1, fmt="{value:.6f}"))
     header = f"train: [{epoch}]"
 
     data_loader = ut.infinite_data_wrapper(data_loader)
