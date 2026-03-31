@@ -454,7 +454,7 @@ def train_one_epoch(
         if need_update:
             for group in optimizer.param_groups:
                 schedule = lr_schedules[group["name"]]
-                group["lr"] = schedule[global_step - 1] * group["lr_multiplier"]
+                group["lr"] = float(schedule[global_step - 1] * group["lr_multiplier"])
             lr = lr_schedules["backbone"][global_step - 1]
             head_lr = lr_schedules["head"][global_step - 1]
 
