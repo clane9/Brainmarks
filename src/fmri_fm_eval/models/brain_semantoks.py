@@ -170,13 +170,19 @@ class BrainSemantoksWrapper(ModelWrapper):
 
 
 @register_model
-def brain_semantoks(**kwargs):
+def brain_semantoks(seed: int | None = None, **kwargs):
     """
     Create Brain-Semantoks model for fmri-fm-eval.
     Downloads pretrained weights from HuggingFace and initializes the model.
     """
+    if seed is not None:
+        prefix = {1: "", 2: "second_random_seed/", 3: "third_random_seed/"}[seed]
+    else:
+        prefix = ""
 
-    checkpoint_path = hf_hub_download(HUGGINGFACE_REPO, "brainsemantoks_ckpt_epoch_100.pth")
+    checkpoint_path = hf_hub_download(
+        HUGGINGFACE_REPO, f"{prefix}brainsemantoks_ckpt_epoch_100.pth"
+    )
     network_map_path = hf_hub_download(HUGGINGFACE_REPO, "network_mapping.npz")
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
