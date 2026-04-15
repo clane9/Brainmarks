@@ -7,6 +7,8 @@ spaces=(
     mni_cortex
     schaefer400_tians3_buckner7
     mni
+    a424
+    schaefer400_tians3
 )
 
 # nb, volume data not currently stored locally
@@ -17,12 +19,14 @@ roots=(
     s3://medarc/fmri-datasets/source/NSD
     s3://medarc/fmri-datasets/source/NSD
     s3://medarc/fmri-datasets/source/NSD
+    data/NSD
+    data/NSD
 )
 
 # OUT_ROOT="s3://medarc/fmri-datasets/eval"
 OUT_ROOT="data/arrow"
 
-SPACEIDS="1"
+SPACEIDS="5 6"
 
 log_path="logs/make_nsd_cococlip_arrow.log"
 

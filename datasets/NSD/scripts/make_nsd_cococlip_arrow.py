@@ -49,9 +49,6 @@ SPLITS = [
 
 
 def main(args):
-    valid_spaces = readers.VOLUME_SPACES | {"fslr64k", "schaefer400", "flat"}
-    assert args.space in valid_spaces, f"{args.space} not supported"
-
     out_root = AnyPath(args.out_root or (ROOT / "data/processed"))
     outdir = out_root / f"nsd-cococlip.{args.space}.arrow"
 
