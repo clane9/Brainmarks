@@ -96,6 +96,29 @@ def get_cifti_struct_data(cifti: Cifti2Image, struct: str) -> np.ndarray:
     raise ValueError(f"Invalid cifti struct {struct}")
 
 
+def get_cifti_surf_indices(cifti: Cifti2Image) -> tuple[np.ndarray, np.ndarray]:
+    lh_ids, lh_mask = get_cifti_struct_indices(cifti, "CIFTI_STRUCTURE_CORTEX_LEFT")
+    rh_ids, rh_mask = get_cifti_struct_indices(cifti, "CIFTI_STRUCTURE_CORTEX_RIGHT")
+    indices = np.concatenate([lh_ids, rh_ids])
+    mask = np.concatenate([lh_mask, rh_mask])
+    return indices, mask
+
+
+def get_cifti_struct_indices(cifti: Cifti2Image, struct: str) -> tuple[np.ndarray, np.ndarray]:
+    axis = get_brain_model_axis(cifti)
+    for name, indices, model in axis.iter_structures():
+        if name == struct:
+            assert np.all(model.vertex[:-1] <= model.vertex[1:]), (
+                f"cifti {struct=} indices not sorted"
+            )
+            num_verts = model.vertex.max() + 1
+            struct_mask = np.zeros(num_verts, dtype=bool)
+            struct_mask[model.vertex] = True
+            indices = np.r_[indices]
+            return indices, struct_mask
+    raise ValueError(f"Invalid cifti struct {struct}")
+
+
 def get_brain_model_axis(cifti: Cifti2Image) -> BrainModelAxis:
     for ii in range(cifti.ndim):
         axis = cifti.header.get_axis(ii)

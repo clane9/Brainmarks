@@ -1,6 +1,7 @@
 from typing import Protocol
 
 import numpy as np
+import nibabel as nib
 from templateflow import api as tflow
 
 from . import nisc
@@ -46,8 +47,18 @@ def schaefer400_reader() -> Reader:
 def schaefer400_tians3_reader() -> Reader:
     parcavg = nisc.parcel_average_schaefer_tian_fslr91k(400, 3)
 
+    parc_path = nisc.fetch_schaefer_tian(400, 3, space="fslr91k")
+    parc_data = nisc.read_cifti_data(parc_path).squeeze(0)
+    parc_img = nib.load(parc_path)
+    parc_surf_ids, parc_surf_mask = nisc.get_cifti_surf_indices(parc_img)
+
     def fn(path: str):
-        series = nisc.read_cifti_data(path)
+        if str(path).endswith(".gii"):
+            series_ = nisc.read_gifti_surf_data(path)
+            series = np.zeros((len(series_), parc_data.shape[0]), dtype=series_.dtype)
+            series[:, parc_surf_ids] = series_[:, parc_surf_mask]
+        else:
+            series = nisc.read_cifti_data(path)
         series = parcavg(series)
         return series
 
@@ -57,8 +68,18 @@ def schaefer400_tians3_reader() -> Reader:
 def a424_reader() -> Reader:
     parcavg = nisc.parcel_average_a424()
 
+    parc_path = nisc.fetch_a424(cifti=True)
+    parc_data = nisc.read_cifti_data(parc_path).squeeze(0)
+    parc_img = nib.load(parc_path)
+    parc_surf_ids, parc_surf_mask = nisc.get_cifti_surf_indices(parc_img)
+
     def fn(path: str):
-        series = nisc.read_cifti_data(path)
+        if str(path).endswith(".gii"):
+            series_ = nisc.read_gifti_surf_data(path)
+            series = np.zeros((len(series_), parc_data.shape[0]), dtype=series_.dtype)
+            series[:, parc_surf_ids] = series_[:, parc_surf_mask]
+        else:
+            series = nisc.read_cifti_data(path)
         series = parcavg(series)
         return series
 

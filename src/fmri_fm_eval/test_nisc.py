@@ -1,4 +1,5 @@
 import numpy as np
+import nibabel as nib
 
 import fmri_fm_eval.nisc as nisc
 
@@ -44,3 +45,17 @@ def test_flat_resampler():
     v = x[resampler.point_mask_][resampler._neigh_ind]
     v_ = x_[resampler.point_mask_][resampler._neigh_ind]
     assert np.mean(v == v_) > 0.97
+
+
+def test_get_cifti_surf_indices():
+    parc_path_surf = nisc.fetch_schaefer(400, space="fslr64k")
+    parc_path_cifti = nisc.fetch_schaefer_tian(400, 3, space="fslr91k")
+
+    parc_surf = nisc.read_cifti_surf_data(parc_path_surf).squeeze(0)
+    parc_cifti = nisc.read_cifti_data(parc_path_cifti).squeeze(0)
+    # nb subcortex at front of schaefer+tians3
+    parc_cifti = np.where(parc_cifti > 0, parc_cifti - 50, 0)
+
+    parc_cifti_img = nib.load(parc_path_cifti)
+    parc_surf_ids, parc_surf_mask = nisc.get_cifti_surf_indices(parc_cifti_img)
+    assert np.all(parc_surf[parc_surf_mask] == parc_cifti[parc_surf_ids])
