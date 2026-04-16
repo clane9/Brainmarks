@@ -115,6 +115,7 @@ def main(args):
                     "split": split,
                     "reader": reader,
                     "is_volume": args.space in readers.VOLUME_SPACES,
+                    "is_cifti": args.space in readers.CIFTI_SPACES,
                 },
                 num_proc=args.num_proc,
                 split=hfds.NamedSplit(split),
@@ -143,8 +144,11 @@ def generate_samples(
     split: str,
     reader: readers.Reader,
     is_volume: bool = False,
+    is_cifti: bool = False,
 ):
-    for (sub, ses, run), path, fullpath in prefetch(root, runs, is_volume=is_volume):
+    for (sub, ses, run), path, fullpath in prefetch(
+        root, runs, is_volume=is_volume, is_cifti=is_cifti
+    ):
         series = reader(fullpath)
         series, mean, std = nisc.scale(series)
 
@@ -178,7 +182,12 @@ def generate_samples(
 
 
 def prefetch(
-    root: AnyPath, runs: list[tuple[str, int, int]], is_volume: bool, *, max_workers: int = 1
+    root: AnyPath,
+    runs: list[tuple[str, int, int]],
+    *,
+    is_volume: bool = False,
+    is_cifti: bool = False,
+    max_workers: int = 1,
 ):
     """Prefetch files from remote storage."""
 
@@ -188,11 +197,14 @@ def prefetch(
             sub, ses, run = run_tuple
             if is_volume:
                 path = f"{sub}/MNI152/timeseries/timeseries_session{ses:02d}_run{run:02d}.nii.gz"
+            elif is_cifti:
+                path = f"{sub}/fslr91k/timeseries/timeseries_session{ses:02d}_run{run:02d}.dtseries.nii"
             else:
                 # nb, .lh path is passed but read_gifti_surf_data loads both hemispheres
                 path = f"{sub}/32k_fs_LR/timeseries/timeseries_session{ses:02d}_run{run:02d}.lh.func.gii"
 
             fullpath = root / "nsddata_timeseries/ppdata" / path
+            # nb, download doesn't get gifti rh
             if isinstance(fullpath, CloudPath):
                 tmppath = Path(tmpdir) / path
                 tmppath.parent.mkdir(parents=True, exist_ok=True)

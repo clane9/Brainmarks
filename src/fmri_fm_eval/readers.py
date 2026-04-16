@@ -184,3 +184,9 @@ VOLUME_SPACES = {
     "mni",
     "mni_cortex",
 }
+
+
+CIFTI_SPACES = {
+    "schaefer400_tians3",
+    "a424",
+}
