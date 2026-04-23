@@ -39,6 +39,7 @@ DEFAULT_CONFIG = Path(__file__).parent / "config/default_probe.yaml"
 METRICS = {
     "acc": sklearn.metrics.accuracy_score,
     "f1": partial(sklearn.metrics.f1_score, average="macro"),
+    "bacc": sklearn.metrics.balanced_accuracy_score,
 }
 
 
