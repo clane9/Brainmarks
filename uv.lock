@@ -582,7 +582,7 @@ requires-dist = [
     { name = "huggingface-hub" },
     { name = "mamba-ssm", marker = "extra == 'neurostorm'", specifier = "==2.2.5" },
     { name = "matplotlib" },
-    { name = "neurostorm", marker = "extra == 'neurostorm'", git = "https://github.com/ckadirt/NeuroSTORM.git?rev=7fa3b96c8021735f1d84a81d0367b2568a2dc6e4" },
+    { name = "neurostorm", marker = "extra == 'neurostorm'", git = "https://github.com/MedARC-AI/NeuroSTORM.git?rev=7fa3b96c8021735f1d84a81d0367b2568a2dc6e4" },
     { name = "nibabel" },
     { name = "nilearn" },
     { name = "numpy" },
@@ -2851,7 +2851,7 @@ wheels = [
 [[package]]
 name = "neurostorm"
 version = "0.1.0"
-source = { git = "https://github.com/ckadirt/NeuroSTORM.git?rev=7fa3b96c8021735f1d84a81d0367b2568a2dc6e4#7fa3b96c8021735f1d84a81d0367b2568a2dc6e4" }
+source = { git = "https://github.com/MedARC-AI/NeuroSTORM.git?rev=7fa3b96c8021735f1d84a81d0367b2568a2dc6e4#7fa3b96c8021735f1d84a81d0367b2568a2dc6e4" }
 dependencies = [
     { name = "ipdb" },
     { name = "mamba-ssm" },
