@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64", "setuptools_scm[toml]>=8"]
+requires = ["setuptools>=77", "setuptools_scm[toml]>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +8,7 @@ dynamic = ["version"]
 description = "Brainmarks: fMRI foundation model evaluation suite"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
 dependencies = [
     "cloudpathlib[s3]",
     "datasets",
@@ -34,6 +35,10 @@ dependencies = [
     "tqdm",
     "wandb",
 ]
+
+[project.urls]
+Homepage = "https://github.com/MedARC-AI/Brainmarks"
+Issues = "https://github.com/MedARC-AI/Brainmarks/issues"
 
 [dependency-groups]
 
