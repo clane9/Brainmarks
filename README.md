@@ -1,5 +1,9 @@
 # Brainmarks
 
+[![Preprint](https://img.shields.io/badge/arXiv-preprint-green?logo=bookstack&logoColor=white)](https://arxiv.org/abs/2510.13768)
+[![Discord](https://dcbadge.limes.pink/api/server/https://discord.gg/tVR4TWnRM9?style=flat)](https://discord.gg/tVR4TWnRM9)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
 Brainmarks is an open evaluation suite for fMRI foundation models.
 
 ## Installation
@@ -105,6 +109,10 @@ Adding a dataset involves two parts: curation scripts that preprocess raw data i
 **Loader modules** live in [src/brainmarks/datasets/](src/brainmarks/datasets/). Each module defines one or more functions decorated with `@register_dataset` that load Arrow shards (local or from S3) into an `HFDataset`. See [src/brainmarks/datasets/hcpya.py](src/brainmarks/datasets/hcpya.py) as a reference.
 
 Dataset loader modules are discovered via the same [namespace package plugin mechanism](https://packaging.python.org/en/latest/guides/creating-and-discovering-plugins/#using-namespace-packages) as models, so they can live in an external repo.
+
+## Support
+
+For help with any issues, reach out to us on [MedARC Discord](https://discord.gg/tVR4TWnRM9) in the `#neuro-fm` channel.
 
 ## Citation
 
