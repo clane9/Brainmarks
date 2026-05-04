@@ -24,6 +24,20 @@ cd brainmarks
 uv sync
 ```
 
+## Datasets
+
+Benchmark datasets are distributed in Huggingface Arrow format hosted in the MedARC R2 bucket. To request access, fill out [this form](https://forms.gle/VGnakBFCBoNnUt2C7).
+
+Once you have credentials, configure them as environment variables:
+
+```bash
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_ENDPOINT_URL_S3=...   # Cloudflare R2 endpoint
+```
+
+Datasets are downloaded automatically on first use and saved in the Huggingface dataset cache.
+
 ## Usage
 
 Brainmarks has two main evaluation modes.
@@ -60,20 +74,6 @@ python -m brainmarks.main_logistic \
 
 All available options are documented in the default configs: [default_probe.yaml](src/brainmarks/config/default_probe.yaml), [default_logistic.yaml](src/brainmarks/config/default_logistic.yaml).
 
-## Datasets
-
-Benchmark datasets are distributed in Huggingface Arrow format hosted in the MedARC R2 bucket. To request access, fill out [this form](https://forms.gle/VGnakBFCBoNnUt2C7).
-
-Once you have credentials, configure them as environment variables:
-
-```bash
-export AWS_ACCESS_KEY_ID=...
-export AWS_SECRET_ACCESS_KEY=...
-export AWS_ENDPOINT_URL_S3=...   # Cloudflare R2 endpoint
-```
-
-Datasets are downloaded automatically on first use and saved in the Huggingface dataset cache.
-
 ## Adding a model
 
 Brainmarks uses [namespace package plugin discovery](https://packaging.python.org/en/latest/guides/creating-and-discovering-plugins/#using-namespace-packages). To add a model from your own repo without modifying this one:
@@ -95,6 +95,16 @@ Brainmarks uses [namespace package plugin discovery](https://packaging.python.or
     ```
 
 See [template.py](src/brainmarks/models/template.py) for more details.
+
+## Adding a dataset
+
+Adding a dataset involves two parts: curation scripts that preprocess raw data into Arrow shards, and a loader module that registers the dataset with Brainmarks.
+
+**Curation scripts** live in [datasets/](datasets/), one subdirectory per source dataset. See [datasets/HCP-YA/](datasets/HCP-YA/) for a reference example — it contains metadata, preprocessing scripts, and a README describing the raw data layout and curation steps.
+
+**Loader modules** live in [src/brainmarks/datasets/](src/brainmarks/datasets/). Each module defines one or more functions decorated with `@register_dataset` that load Arrow shards (local or from S3) into an `HFDataset`. See [src/brainmarks/datasets/hcpya.py](src/brainmarks/datasets/hcpya.py) as a reference.
+
+Dataset loader modules are discovered via the same [namespace package plugin mechanism](https://packaging.python.org/en/latest/guides/creating-and-discovering-plugins/#using-namespace-packages) as models, so they can live in an external repo.
 
 ## Citation
 
