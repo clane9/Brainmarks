@@ -12,8 +12,8 @@ import pandas as pd
 from cloudpathlib import AnyPath, CloudPath, S3Client, S3Path
 from boto3.s3.transfer import TransferConfig
 
-import fmri_fm_eval.nisc as nisc
-import fmri_fm_eval.readers as readers
+import brainmarks.nisc as nisc
+import brainmarks.readers as readers
 
 # use smaller writer batch size to avoid OverflowError on very large mni data
 # https://github.com/huggingface/datasets/issues/6422

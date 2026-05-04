@@ -20,7 +20,7 @@ import numpy as np
 from cloudpathlib import AnyPath, CloudPath, S3Client, S3Path
 from nibabel.orientations import io_orientation, ornt_transform
 
-import fmri_fm_eval.nisc as nisc
+import brainmarks.nisc as nisc
 
 logging.basicConfig(
     format="[%(levelname)s %(asctime)s]: %(message)s",

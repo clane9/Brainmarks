@@ -11,9 +11,9 @@ import numpy as np
 import pandas as pd
 from cloudpathlib import AnyPath, CloudPath, S3Path
 
-import fmri_fm_eval.nisc as nisc
-import fmri_fm_eval.readers as readers
-import fmri_fm_eval.utils as ut
+import brainmarks.nisc as nisc
+import brainmarks.readers as readers
+import brainmarks.utils as ut
 
 logging.basicConfig(
     format="[%(levelname)s %(asctime)s]: %(message)s",

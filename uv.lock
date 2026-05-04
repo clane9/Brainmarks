@@ -523,6 +523,111 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainmarks"
+source = { editable = "." }
+dependencies = [
+    { name = "cloudpathlib", extra = ["s3"] },
+    { name = "datasets" },
+    { name = "einops" },
+    { name = "gdown" },
+    { name = "huggingface-hub" },
+    { name = "ipython" },
+    { name = "jupyter" },
+    { name = "matplotlib" },
+    { name = "neuromaps" },
+    { name = "nibabel" },
+    { name = "nsdcode" },
+    { name = "numpy" },
+    { name = "omegaconf" },
+    { name = "pandas" },
+    { name = "peft" },
+    { name = "pre-commit" },
+    { name = "pycortex" },
+    { name = "pytest" },
+    { name = "python-dotenv" },
+    { name = "s3fs" },
+    { name = "scikit-learn" },
+    { name = "seaborn" },
+    { name = "setuptools" },
+    { name = "tabulate" },
+    { name = "templateflow" },
+    { name = "torch" },
+    { name = "tqdm" },
+    { name = "wandb" },
+    { name = "webdataset" },
+    { name = "yaspy" },
+]
+
+[package.optional-dependencies]
+brain-jepa = [
+    { name = "brain-jepa" },
+]
+brain-semantoks = [
+    { name = "brain-semantoks" },
+]
+brainharmonix = [
+    { name = "brainharmonix" },
+]
+brainlm = [
+    { name = "brainlm" },
+]
+fmri-fm = [
+    { name = "fmri-fm" },
+]
+neurostorm = [
+    { name = "mamba-ssm" },
+    { name = "neurostorm" },
+    { name = "wheel" },
+]
+swift = [
+    { name = "swiftfmri" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "brain-jepa", marker = "extra == 'brain-jepa'", git = "https://github.com/MedARC-AI/Brain-JEPA.git?rev=c43f8a647b948000ec1a92c4ea6f5efb4efc27f1" },
+    { name = "brain-semantoks", marker = "extra == 'brain-semantoks'", git = "https://github.com/SamGijsen/Brain-Semantoks.git?rev=4b48b5942b2f7df60fe8aaf3f328733fad647b54" },
+    { name = "brainharmonix", marker = "extra == 'brainharmonix'", git = "https://github.com/MedARC-AI/Brain-Harmony.git?rev=5398f8f5540222973cf82d13ac1eb4c4b38af636" },
+    { name = "brainlm", marker = "extra == 'brainlm'", git = "https://github.com/MedARC-AI/BrainLM.git?rev=e287e0fa0f2dda61b448614d92e9041cb38fa128" },
+    { name = "cloudpathlib", extras = ["s3"] },
+    { name = "datasets" },
+    { name = "einops" },
+    { name = "fmri-fm", marker = "extra == 'fmri-fm'", git = "https://github.com/MedARC-AI/fmri-fm.git?rev=b44b7ccb728e8828a75e55cc1ff5e3d01d6ac751" },
+    { name = "gdown" },
+    { name = "huggingface-hub" },
+    { name = "ipython" },
+    { name = "jupyter" },
+    { name = "mamba-ssm", marker = "extra == 'neurostorm'", specifier = "==2.2.5" },
+    { name = "matplotlib" },
+    { name = "neuromaps" },
+    { name = "neurostorm", marker = "extra == 'neurostorm'", git = "https://github.com/ckadirt/NeuroSTORM.git?rev=7fa3b96c8021735f1d84a81d0367b2568a2dc6e4" },
+    { name = "nibabel" },
+    { name = "nsdcode", git = "https://github.com/cvnlab/nsdcode.git?rev=bfd36a503cc90a3eb3ebfd69b269403f7e186924" },
+    { name = "numpy" },
+    { name = "omegaconf" },
+    { name = "pandas" },
+    { name = "peft" },
+    { name = "pre-commit" },
+    { name = "pycortex" },
+    { name = "pytest" },
+    { name = "python-dotenv" },
+    { name = "s3fs" },
+    { name = "scikit-learn" },
+    { name = "seaborn" },
+    { name = "setuptools", specifier = "<67" },
+    { name = "swiftfmri", marker = "extra == 'swift'", git = "https://github.com/MedARC-AI/SwiFT.git?rev=324b003061e484ebd1a247967b520019fda911fc" },
+    { name = "tabulate" },
+    { name = "templateflow" },
+    { name = "torch" },
+    { name = "tqdm" },
+    { name = "wandb" },
+    { name = "webdataset" },
+    { name = "wheel", marker = "extra == 'neurostorm'" },
+    { name = "yaspy", git = "https://github.com/childmindresearch/yaspy.git" },
+]
+provides-extras = ["brain-jepa", "swift", "brainlm", "brainharmonix", "brain-semantoks", "neurostorm", "fmri-fm"]
+
+[[package]]
 name = "bravado"
 version = "11.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1077,111 +1182,6 @@ dependencies = [
     { name = "wandb" },
     { name = "webdataset" },
 ]
-
-[[package]]
-name = "fmri-fm-eval"
-source = { editable = "." }
-dependencies = [
-    { name = "cloudpathlib", extra = ["s3"] },
-    { name = "datasets" },
-    { name = "einops" },
-    { name = "gdown" },
-    { name = "huggingface-hub" },
-    { name = "ipython" },
-    { name = "jupyter" },
-    { name = "matplotlib" },
-    { name = "neuromaps" },
-    { name = "nibabel" },
-    { name = "nsdcode" },
-    { name = "numpy" },
-    { name = "omegaconf" },
-    { name = "pandas" },
-    { name = "peft" },
-    { name = "pre-commit" },
-    { name = "pycortex" },
-    { name = "pytest" },
-    { name = "python-dotenv" },
-    { name = "s3fs" },
-    { name = "scikit-learn" },
-    { name = "seaborn" },
-    { name = "setuptools" },
-    { name = "tabulate" },
-    { name = "templateflow" },
-    { name = "torch" },
-    { name = "tqdm" },
-    { name = "wandb" },
-    { name = "webdataset" },
-    { name = "yaspy" },
-]
-
-[package.optional-dependencies]
-brain-jepa = [
-    { name = "brain-jepa" },
-]
-brain-semantoks = [
-    { name = "brain-semantoks" },
-]
-brainharmonix = [
-    { name = "brainharmonix" },
-]
-brainlm = [
-    { name = "brainlm" },
-]
-fmri-fm = [
-    { name = "fmri-fm" },
-]
-neurostorm = [
-    { name = "mamba-ssm" },
-    { name = "neurostorm" },
-    { name = "wheel" },
-]
-swift = [
-    { name = "swiftfmri" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "brain-jepa", marker = "extra == 'brain-jepa'", git = "https://github.com/MedARC-AI/Brain-JEPA.git?rev=c43f8a647b948000ec1a92c4ea6f5efb4efc27f1" },
-    { name = "brain-semantoks", marker = "extra == 'brain-semantoks'", git = "https://github.com/SamGijsen/Brain-Semantoks.git?rev=4b48b5942b2f7df60fe8aaf3f328733fad647b54" },
-    { name = "brainharmonix", marker = "extra == 'brainharmonix'", git = "https://github.com/MedARC-AI/Brain-Harmony.git?rev=5398f8f5540222973cf82d13ac1eb4c4b38af636" },
-    { name = "brainlm", marker = "extra == 'brainlm'", git = "https://github.com/MedARC-AI/BrainLM.git?rev=e287e0fa0f2dda61b448614d92e9041cb38fa128" },
-    { name = "cloudpathlib", extras = ["s3"] },
-    { name = "datasets" },
-    { name = "einops" },
-    { name = "fmri-fm", marker = "extra == 'fmri-fm'", git = "https://github.com/MedARC-AI/fmri-fm.git?rev=b44b7ccb728e8828a75e55cc1ff5e3d01d6ac751" },
-    { name = "gdown" },
-    { name = "huggingface-hub" },
-    { name = "ipython" },
-    { name = "jupyter" },
-    { name = "mamba-ssm", marker = "extra == 'neurostorm'", specifier = "==2.2.5" },
-    { name = "matplotlib" },
-    { name = "neuromaps" },
-    { name = "neurostorm", marker = "extra == 'neurostorm'", git = "https://github.com/ckadirt/NeuroSTORM.git?rev=7fa3b96c8021735f1d84a81d0367b2568a2dc6e4" },
-    { name = "nibabel" },
-    { name = "nsdcode", git = "https://github.com/cvnlab/nsdcode.git?rev=bfd36a503cc90a3eb3ebfd69b269403f7e186924" },
-    { name = "numpy" },
-    { name = "omegaconf" },
-    { name = "pandas" },
-    { name = "peft" },
-    { name = "pre-commit" },
-    { name = "pycortex" },
-    { name = "pytest" },
-    { name = "python-dotenv" },
-    { name = "s3fs" },
-    { name = "scikit-learn" },
-    { name = "seaborn" },
-    { name = "setuptools", specifier = "<67" },
-    { name = "swiftfmri", marker = "extra == 'swift'", git = "https://github.com/MedARC-AI/SwiFT.git?rev=324b003061e484ebd1a247967b520019fda911fc" },
-    { name = "tabulate" },
-    { name = "templateflow" },
-    { name = "torch" },
-    { name = "tqdm" },
-    { name = "wandb" },
-    { name = "webdataset" },
-    { name = "wheel", marker = "extra == 'neurostorm'" },
-    { name = "yaspy", git = "https://github.com/childmindresearch/yaspy.git" },
-]
-provides-extras = ["brain-jepa", "swift", "brainlm", "brainharmonix", "brain-semantoks", "neurostorm", "fmri-fm"]
 
 [[package]]
 name = "fonttools"

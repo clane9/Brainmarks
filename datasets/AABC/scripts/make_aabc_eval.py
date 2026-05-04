@@ -11,7 +11,6 @@ Follows the same pattern as HCP-YA evaluation datasets.
 import argparse
 import json
 import logging
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -19,8 +18,8 @@ from pathlib import Path
 import datasets as hfds
 import numpy as np
 
-import fmri_fm_eval.nisc as nisc
-import fmri_fm_eval.readers as readers
+import brainmarks.nisc as nisc
+import brainmarks.readers as readers
 
 logging.basicConfig(
     format="[%(levelname)s %(asctime)s]: %(message)s",
@@ -104,7 +103,9 @@ def main(args):
                 continue
             # Randomly select ONE visit per subject (deterministic due to fixed seed)
             selected_visit = rng.choice(visits)
-            for task, (task_dir, suffix, window_size, max_windows) in get_task_config(args.space).items():
+            for task, (task_dir, suffix, window_size, max_windows) in get_task_config(
+                args.space
+            ).items():
                 path = f"{sub}_{selected_visit}_MR/MNINonLinear/Results/{task_dir}/{suffix}"
                 fullpath = AABC_ROOT / path
                 if fullpath.exists():

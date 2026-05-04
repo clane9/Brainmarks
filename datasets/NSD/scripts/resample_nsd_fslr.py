@@ -12,7 +12,7 @@ import numpy as np
 from nsdcode import NSDmapdata
 from tqdm import tqdm
 
-import fmri_fm_eval.nisc as nisc
+import brainmarks.nisc as nisc
 
 # Disable tqdm by default
 # https://stackoverflow.com/a/67238486

@@ -6,17 +6,19 @@ This script creates WebDataset TARs containing REST fMRI only:
 Using REST-only ensures consistent sample sizes for pretraining.
 Follows the same pattern as HCP-YA pretraining datasets.
 """
+
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import webdataset as wds
 
-import fmri_fm_eval.nisc as nisc
-import fmri_fm_eval.readers as readers
+import brainmarks.nisc as nisc
+import brainmarks.readers as readers
 
 logging.basicConfig(
     format="[%(levelname)s %(asctime)s]: %(message)s",
@@ -28,7 +30,7 @@ logging.getLogger("nibabel").setLevel(logging.ERROR)
 _logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).parents[1]
-AABC_ROOT= os.getenv("AABC_ROOT")
+AABC_ROOT = os.getenv("AABC_ROOT")
 assert AABC_ROOT is not None, (
     "AABC_ROOT environment variable is not set. "
     "Please set it to the directory containing AABC raw data. "
@@ -102,14 +104,16 @@ def main(args):
 
         # For REST, create multiple windows; for tasks, single window
         for segment in range(max_windows):
-            all_samples.append({
-                "sub": row["sub"],
-                "visit": row["visit"],
-                "task": task,
-                "path": row["path"],
-                "segment": segment,
-                "window_size": window_size,
-            })
+            all_samples.append(
+                {
+                    "sub": row["sub"],
+                    "visit": row["visit"],
+                    "task": task,
+                    "path": row["path"],
+                    "segment": segment,
+                    "window_size": window_size,
+                }
+            )
 
     _logger.info("Total samples (with windowing): %d", len(all_samples))
 
@@ -117,8 +121,7 @@ def main(args):
         existing = list(outdir.glob("aabc-*.tar"))
         if existing:
             _logger.error(
-                "Found %d existing shards in %s. Use --overwrite to replace.",
-                len(existing), outdir
+                "Found %d existing shards in %s. Use --overwrite to replace.", len(existing), outdir
             )
             return
 
@@ -151,7 +154,11 @@ def main(args):
                     else:
                         _logger.warning(
                             "Subject %s visit %s task %s has only %d TRs (< %d), skipping",
-                            sample["sub"], sample["visit"], sample["task"], T, window_size
+                            sample["sub"],
+                            sample["visit"],
+                            sample["task"],
+                            T,
+                            window_size,
                         )
                         total_skipped += 1
                         continue
@@ -172,25 +179,29 @@ def main(args):
             key = f"{sample['sub']}_{sample['visit']}_{sample['task']}_{segment}"
 
             # Write to TAR
-            sink.write({
-                "__key__": key,
-                "npy": series_f16.tobytes(),
-                "json": json.dumps({
-                    "sub": sample["sub"],
-                    "visit": sample["visit"],
-                    "task": sample["task"],
-                    "tr": AABC_TR,
-                    "n_frames": series_f16.shape[0],
-                    "dim": dim,
-                    "dtype": "float16",
-                    "shape": list(series_f16.shape),
-                    "mean": mean.squeeze().astype(np.float32).tolist(),
-                    "std": std.squeeze().astype(np.float32).tolist(),
-                    "segment": segment,
-                    "start": start,
-                    "end": end,
-                }),
-            })
+            sink.write(
+                {
+                    "__key__": key,
+                    "npy": series_f16.tobytes(),
+                    "json": json.dumps(
+                        {
+                            "sub": sample["sub"],
+                            "visit": sample["visit"],
+                            "task": sample["task"],
+                            "tr": AABC_TR,
+                            "n_frames": series_f16.shape[0],
+                            "dim": dim,
+                            "dtype": "float16",
+                            "shape": list(series_f16.shape),
+                            "mean": mean.squeeze().astype(np.float32).tolist(),
+                            "std": std.squeeze().astype(np.float32).tolist(),
+                            "segment": segment,
+                            "start": start,
+                            "end": end,
+                        }
+                    ),
+                }
+            )
             total_written += 1
 
     _logger.info("WebDataset TAR creation complete!")
@@ -205,24 +216,22 @@ if __name__ == "__main__":
         type=str,
         default="flat",
         choices=list(readers.READER_DICT),
-        help="Target anatomical space for processing (default: flat)"
+        help="Target anatomical space for processing (default: flat)",
     )
     parser.add_argument(
         "--outdir",
         type=str,
         default=str(AABC_ROOT),
-        help="Output directory for WebDataset TARs (default: AABC_data)"
+        help="Output directory for WebDataset TARs (default: AABC_data)",
     )
     parser.add_argument(
         "--shard_size_mb",
         type=int,
         default=DEFAULT_SHARD_SIZE_MB,
-        help="Target shard size in MB (default: 700)"
+        help="Target shard size in MB (default: 700)",
     )
     parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Overwrite existing shards in the output directory"
+        "--overwrite", action="store_true", help="Overwrite existing shards in the output directory"
     )
     args = parser.parse_args()
     main(args)

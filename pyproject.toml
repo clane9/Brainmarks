@@ -3,9 +3,9 @@ requires = ["setuptools>=64", "setuptools_scm[toml]>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fmri-fm-eval"
+name = "brainmarks"
 dynamic = ["version"]
-description = "MedARC fMRI foundation model evals"
+description = "Brainmarks: fMRI foundation model evaluation suite"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -74,7 +74,7 @@ fmri-fm = [
 ]
 
 [tool.setuptools_scm]
-version_file = "src/fmri_fm_eval/version.py"
+version_file = "src/brainmarks/version.py"
 
 [tool.uv.sources]
 nsdcode = { git = "https://github.com/cvnlab/nsdcode.git", rev = "bfd36a503cc90a3eb3ebfd69b269403f7e186924" }

@@ -12,6 +12,9 @@ version.py
 # IDE
 .vscode/
 
+# Agents
+CLAUDE.md
+
 # Virtual environment
 .venv/
 

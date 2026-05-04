@@ -1,1 +1,1 @@
-# fMRI foundation model evaluation suite
+# Brainmarks: fMRI foundation model evaluation suite
