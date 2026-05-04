@@ -9,15 +9,21 @@ Brainmarks is an open evaluation suite for fMRI foundation models.
 ## Installation
 
 ```bash
-pip install "brainmarks @ git+https://github.com/MedARC-AI/brainmarks"
+pip install brainmarks
 # or
-uv add "brainmarks @ git+https://github.com/MedARC-AI/brainmarks"
+uv add brainmarks
 ```
 
 Model wrappers for third-party encoders are optional extras:
 
 ```bash
-pip install "brainmarks[brain-jepa,brainlm,swift,brainharmonix,brain-semantoks,neurostorm] @ git+https://github.com/MedARC-AI/brainmarks"
+pip install "brainmarks[brain-jepa,brainlm,swift,brainharmonix,brain-semantoks,neurostorm]"
+```
+
+To install the latest development version from GitHub:
+
+```bash
+pip install "brainmarks @ git+https://github.com/MedARC-AI/brainmarks"
 ```
 
 **From source:**
