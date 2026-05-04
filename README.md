@@ -13,7 +13,7 @@ uv add "brainmarks @ git+https://github.com/MedARC-AI/brainmarks"
 Model wrappers for third-party encoders are optional extras:
 
 ```bash
-pip install "brainmarks[brain-jepa,brainlm,swift,brainharmonix,brain-semantoks,neurostorm,fmri-fm] @ git+https://github.com/MedARC-AI/brainmarks"
+pip install "brainmarks[brain-jepa,brainlm,swift,brainharmonix,brain-semantoks,neurostorm] @ git+https://github.com/MedARC-AI/brainmarks"
 ```
 
 **From source:**
@@ -21,7 +21,7 @@ pip install "brainmarks[brain-jepa,brainlm,swift,brainharmonix,brain-semantoks,n
 ```bash
 git clone https://github.com/MedARC-AI/brainmarks
 cd brainmarks
-uv sync
+uv sync --python 3.11
 ```
 
 ## Datasets
