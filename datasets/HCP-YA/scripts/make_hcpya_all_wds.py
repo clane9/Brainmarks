@@ -13,8 +13,8 @@ import pandas as pd
 import webdataset as wds
 from cloudpathlib import AnyPath, CloudPath, S3Client
 
-import fmri_fm_eval.nisc as nisc
-import fmri_fm_eval.readers as readers
+import brainmarks.nisc as nisc
+import brainmarks.readers as readers
 
 logging.basicConfig(
     format="[%(levelname)s %(asctime)s]: %(message)s",

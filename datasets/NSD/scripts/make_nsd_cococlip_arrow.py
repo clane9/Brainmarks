@@ -1,15 +1,19 @@
 import argparse
 import logging
+import os
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import datasets as hfds
 import numpy as np
 import pandas as pd
+from cloudpathlib import AnyPath, CloudPath, S3Client, S3Path
+from boto3.s3.transfer import TransferConfig
 
-import fmri_fm_eval.nisc as nisc
-import fmri_fm_eval.readers as readers
+import brainmarks.nisc as nisc
+import brainmarks.readers as readers
 
 # use smaller writer batch size to avoid OverflowError on very large mni data
 # https://github.com/huggingface/datasets/issues/6422
@@ -35,69 +39,44 @@ NSD_TR = 1.0
 # clip length
 NUM_FRAMES = 16
 
-# split of subjects and sessions
-# we hold out two subjects for validation and test
-# we also include an in-distribution test set "testid"
-# nb, sessions are 1-indexed in the metadata (from NSD filenames)
-SUB_SES_SPLITS = {
-    "train": [
-        ("subj01", (0, 35)),
-        ("subj02", (0, 35)),
-        ("subj03", (0, 27)),
-        ("subj06", (0, 27)),
-        ("subj07", (0, 35)),
-        ("subj08", (0, 25)),
-    ],
-    "validation": [
-        ("subj04", (0, 30)),
-    ],
-    "test": [
-        ("subj05", (0, 30)),  # nb, subj05 still has 10 more sessions
-    ],
-    "testid": [
-        ("subj01", (35, 40)),
-        ("subj02", (35, 40)),
-        ("subj03", (27, 32)),
-        ("subj06", (27, 32)),
-        ("subj07", (35, 40)),
-        ("subj08", (25, 30)),
-    ],
-}
+SPLITS = [
+    "train",
+    "validation",
+    "test",
+    "testid",
+    "shared1000",
+]
 
 
 def main(args):
-    assert args.space in {"fslr64k", "schaefer400", "flat"}, f"{args.space} not yet supported"
+    out_root = AnyPath(args.out_root or (ROOT / "data/processed"))
+    outdir = out_root / f"nsd-cococlip.{args.space}.arrow"
 
-    outdir = ROOT / f"data/processed/nsd-cococlip.{args.space}.arrow"
+    upload_client = get_s3_client()
+    if isinstance(outdir, CloudPath):
+        outdir = CloudPath(outdir, client=upload_client)
+
     _logger.info("Generating dataset: %s", outdir)
     if outdir.exists():
-        _logger.warning("Output %s exists; exiting.", outdir)
-        return 1
+        _logger.info("Output %s exists; exiting.", outdir)
+        return
 
-    trial_df = pd.read_parquet(ROOT / "metadata/nsd_trial_metadata.parquet")
-    include_trial_ids = np.load(ROOT / "metadata/nsd_include_trial_ids.npy")
-    trial_df = trial_df.loc[include_trial_ids]
+    meta_df = pd.read_csv(ROOT / "metadata/nsd_cococlip_metadata.csv")
 
     run_splits = {}
-    for split in SUB_SES_SPLITS:
+    for split in SPLITS:
         run_splits[split] = []
-        for sub, (start, end) in SUB_SES_SPLITS[split]:
-            for ses_id in range(start, end):
-                ses = ses_id + 1  # nsd sessions are 1-indexed
-                ses_df = trial_df.query(f"sub == '{sub}' and ses == {ses}")
-                for run in ses_df["run"].unique().tolist():
-                    run_splits[split].append((sub, ses, run))
-        _logger.info(f"{split}: num runs = {len(run_splits[split])}")
-
-    logits = np.load(ROOT / "data/nsd_clip_coco_logits.npy")
-    # nb, targets are shape (n, 80) (excluding background category 0)
-    # so if you're used to classic coco category ids these will be off by 1
-    targets = np.argmax(logits, axis=1)
+        split_df = meta_df.loc[meta_df["split"] == split]
+        for (sub, ses, run), _ in split_df.groupby(["sub", "ses", "run"]):
+            run_splits[split].append((sub, ses, run))
 
     # load the data reader for the target space and look up the data dimension.
     # all readers return a bold data array of shape (n_samples, dim).
     reader = readers.READER_DICT[args.space]()
     dim = readers.DATA_DIMS[args.space]
+
+    # root can be local or remote.
+    root = AnyPath(args.root or NSD_ROOT)
 
     # the bold data are scaled to mean 0, stdev 1 and then truncated to float16 to save
     # space. but we keep the mean and std to reverse this since some models need this.
@@ -131,10 +110,12 @@ def main(args):
                 features=features,
                 gen_kwargs={
                     "runs": runs,
-                    "root": NSD_ROOT,
-                    "trial_df": trial_df,
-                    "targets": targets,
+                    "root": root,
+                    "meta_df": meta_df,
+                    "split": split,
                     "reader": reader,
+                    "is_volume": args.space in readers.VOLUME_SPACES,
+                    "is_cifti": args.space in readers.CIFTI_SPACES,
                 },
                 num_proc=args.num_proc,
                 split=hfds.NamedSplit(split),
@@ -144,34 +125,42 @@ def main(args):
             )
         dataset = hfds.DatasetDict(dataset_dict)
 
-        outdir.parent.mkdir(exist_ok=True, parents=True)
-        dataset.save_to_disk(outdir, max_shard_size="300MB")
+        if isinstance(outdir, S3Path):
+            _logger.info("Saving to s3: %s", outdir)
+            tmp_outdir = Path(tmpdir) / outdir.name
+            # in theory save_to_disk should support s3, but idk why it wasn't working
+            dataset.save_to_disk(tmp_outdir, max_shard_size="300MB")
+            outdir.upload_from(tmp_outdir)
+        else:
+            _logger.info("Saving locally: %s", outdir)
+            dataset.save_to_disk(outdir, max_shard_size="300MB")
 
 
 def generate_samples(
     runs: list[tuple[str, int, int]],
     *,
     root: Path,
-    trial_df: pd.DataFrame,
-    targets: np.ndarray,
+    meta_df: pd.DataFrame,
+    split: str,
     reader: readers.Reader,
+    is_volume: bool = False,
+    is_cifti: bool = False,
 ):
-    for sub, ses, run in runs:
-        # nb, .lh path is passed but read_gifti_surf_data loads both hemispheres
-        path = f"{sub}/32k_fs_LR/timeseries/timeseries_session{ses:02d}_run{run:02d}.lh.func.gii"
-        fullpath = root / "nsddata_timeseries/ppdata" / path
-
+    for (sub, ses, run), path, fullpath in prefetch(
+        root, runs, is_volume=is_volume, is_cifti=is_cifti
+    ):
         series = reader(fullpath)
         series, mean, std = nisc.scale(series)
 
-        run_df = trial_df.query(f"sub == '{sub}' and ses == {ses} and run == {run}")
+        run_df = meta_df.query(
+            f"sub == '{sub}' and ses == {ses} and run == {run} and split == '{split}'"
+        )
         for _, event in run_df.iterrows():
             start = int(event["onset"] / NSD_TR)
             end = start + NUM_FRAMES
             if end > len(series):
                 continue
             clip = series[start:end]
-            target = targets[event["nsd_id"]]
 
             sample = {
                 "sub": sub,
@@ -179,7 +168,7 @@ def generate_samples(
                 "run": run,
                 "trial_id": event["trial_id"],
                 "nsd_id": event["nsd_id"],
-                "category_id": target,
+                "category_id": event["category_id"],
                 "path": str(path),
                 "start": start,
                 "end": end,
@@ -192,8 +181,71 @@ def generate_samples(
             yield sample
 
 
+def prefetch(
+    root: AnyPath,
+    runs: list[tuple[str, int, int]],
+    *,
+    is_volume: bool = False,
+    is_cifti: bool = False,
+    max_workers: int = 1,
+):
+    """Prefetch files from remote storage."""
+
+    with tempfile.TemporaryDirectory(prefix="prefetch-") as tmpdir:
+
+        def fn(run_tuple: tuple[str, int, int]):
+            sub, ses, run = run_tuple
+            if is_volume:
+                path = f"{sub}/MNI152/timeseries/timeseries_session{ses:02d}_run{run:02d}.nii.gz"
+            elif is_cifti:
+                path = f"{sub}/fslr91k/timeseries/timeseries_session{ses:02d}_run{run:02d}.dtseries.nii"
+            else:
+                # nb, .lh path is passed but read_gifti_surf_data loads both hemispheres
+                path = f"{sub}/32k_fs_LR/timeseries/timeseries_session{ses:02d}_run{run:02d}.lh.func.gii"
+
+            fullpath = root / "nsddata_timeseries/ppdata" / path
+            # nb, download doesn't get gifti rh
+            if isinstance(fullpath, CloudPath):
+                tmppath = Path(tmpdir) / path
+                tmppath.parent.mkdir(parents=True, exist_ok=True)
+                fullpath = fullpath.download_to(tmppath)
+            return run_tuple, path, fullpath
+
+        with ThreadPoolExecutor(max_workers) as executor:
+            futures = [executor.submit(fn, run_tuple) for run_tuple in runs]
+
+            for future in futures:
+                run_tuple, path, fullpath = future.result()
+                yield run_tuple, path, fullpath
+
+                if str(fullpath).startswith(tmpdir):
+                    fullpath.unlink()
+
+
+def get_s3_client():
+    config = TransferConfig(
+        multipart_threshold=8 * 1024 * 1024,
+        multipart_chunksize=8 * 1024 * 1024,
+        max_concurrency=10,
+        use_threads=True,
+    )
+
+    if "R2_ACCESS_KEY_ID" in os.environ:
+        client = S3Client(
+            aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+            endpoint_url=os.environ["R2_ENDPOINT_URL_S3"],
+            boto3_transfer_config=config,
+        )
+    else:
+        client = S3Client(boto3_transfer_config=config)
+    return client
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=str, default=None)
+    parser.add_argument("--out-root", type=str, default=None)
     parser.add_argument(
         "--space", type=str, default="schaefer400", choices=list(readers.READER_DICT)
     )

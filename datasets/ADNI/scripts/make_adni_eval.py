@@ -23,8 +23,8 @@ from pathlib import Path
 import datasets as hfds
 import numpy as np
 
-import fmri_fm_eval.nisc as nisc
-import fmri_fm_eval.readers as readers
+import brainmarks.nisc as nisc
+import brainmarks.readers as readers
 
 # use smaller writer batch size to avoid OverflowError on very large mni data
 # https://github.com/huggingface/datasets/issues/6422

@@ -26,6 +26,11 @@ aws s3 sync --no-sign-request s3://natural-scenes-dataset "data/NSD" \
     --include "nsddata_timeseries/ppdata/subj*/func1mm/timeseries/timeseries_*.nii.gz" \
     --include "nsddata/ppdata/subj*/transforms/*" \
     --include "nsddata/freesurfer/*"
+
+# Betas
+aws s3 sync --no-sign-request s3://natural-scenes-dataset "data/NSD" \
+    --exclude "*" \
+    --include "nsddata_betas/ppdata/subj01/fsaverage/betas_fithrf/?h.betas_session??.mgh"
 ```
 
 ## 2. Resample to template space
@@ -45,6 +50,18 @@ To run this step you will also need to install [`wb_command`](https://www.humanc
 The outputs are available at `s3://medarc/fmri-datasets/source/NSD`.
 
 > **TODO**: add resampling to MNI volume space
+
+```bash
+export OMP_NUM_THREADS=1
+
+parallel --jobs 64 -a metadata/nsd_path_list.txt \
+    uv run --no-sync \
+    python scripts/resample_nsd_mni.py \
+    --out-dir data/NSD \
+    --nsd-dir data/NSD \
+    {} \
+    2>&1 | tee -a logs/resample_nsd_mni.log
+```
 
 ## 3. Generate eval datasets
 

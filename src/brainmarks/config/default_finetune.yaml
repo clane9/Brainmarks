@@ -1,0 +1,99 @@
+# Root output directory
+# Individual eval runs will be saved as:
+#
+#   output_root/{name_prefix}/{dataset}__{model}__{representation}__{classifier}
+output_root: output
+name_prefix: eval_finetune
+
+# Remote root for backing up results
+# currently only S3 supported
+remote_root: null
+
+# Description of the run. Goes in wandb notes.
+notes: null
+
+# Model and dataset extra kwargs
+model_kwargs: {}
+dataset_kwargs: {}
+
+# Classifier settings
+
+classifier_kwargs:
+  # Intermediate embed dim for attn and mlp classifiers
+  # Defaults to input embed dim
+  embed_dim: null
+  # Dropout for mlp classifier
+  dropout: 0.0
+  # Xavier initialization for linear classifier
+  xavier_init: true
+  # Batch norm for linear classifier
+  norm: true
+
+# Fine-tuning mode: "lora" or "full_ft"
+finetune_mode: lora
+
+# LoRA configuration (only used when finetune_mode: lora)
+lora:
+  r: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
+  # "all-linear" targets all nn.Linear layers.
+  # Can also be a regex pattern e.g. ".*attn.*" for attention-only.
+  target_modules: "all-linear"
+  exclude_modules: null
+
+full_ft:
+  # List of regex patterns matched against parameter names to freeze.
+  # If null, no layers are frozen.
+  freeze_layers: null
+
+# Data loader
+num_workers: 8
+prefetch_factor: null
+# oversample minority classes for balanced sampling
+balanced_sampling: false
+
+# Optimization
+# 4k steps over 20 short epochs to help with early stopping and plotting
+epochs: 20
+steps_per_epoch: 200
+# total_batch_size = batch_size * accum_iter
+batch_size: 32
+accum_iter: 4
+
+# Learning rates
+# base lr for LoRA backbone parameters
+lr: 1e-4
+# classifier head lr = lr * head_lr_scale
+head_lr_scale: 10.0
+# number of epochs to delay backbone training (backbone lr = 0).
+delay_epochs: 0
+# linear warmup
+warmup_epochs: 5
+# cosine decay by default
+no_decay: false
+# weight decay
+weight_decay: 0.05
+clip_grad: 1.0
+
+# scoring metrics
+metrics:
+- acc
+
+# any of the metrics, or neg_loss
+# assumes higher is better
+cv_metric: acc
+
+# evaluate best checkpoint wrt to cv score
+early_stopping: true
+
+amp: true
+
+device: cuda
+
+seed: 4466
+debug: false
+
+wandb: false
+wandb_entity: null
+wandb_project: brainmarks

@@ -1,0 +1,61 @@
+import numpy as np
+import nibabel as nib
+
+import brainmarks.nisc as nisc
+
+
+def test_parcel_average():
+    x = np.random.randn(10, nisc.FSLR64K_NUM_VERTICES).astype(np.float32)
+
+    parcavg = nisc.parcel_average_schaefer_fslr64k(400, sparse=False)
+    z = parcavg(x)
+    assert z.shape == (10, 400)
+
+    idx = 9
+    assert np.allclose(z[:, idx], x[:, parcavg.parc == (idx + 1)].mean(axis=1))
+
+
+def test_parcel_average_sparse():
+    x = np.random.randn(10, nisc.FSLR64K_NUM_VERTICES).astype(np.float32)
+
+    parcavg_sprs = nisc.parcel_average_schaefer_fslr64k(400, sparse=True)
+    z_sprs = parcavg_sprs(x)
+
+    parcavg = nisc.parcel_average_schaefer_fslr64k(400, sparse=False)
+    z = parcavg(x)
+    assert np.allclose(z, z_sprs, atol=1e-5)
+
+
+def test_flat_resampler():
+    resampler = nisc.flat_resampler_fslr64k_224_560()
+    assert resampler.mask_.shape == (224, 560)
+    assert resampler.mask_.sum() == 77763
+
+    x = np.random.randn(nisc.FSLR64K_NUM_VERTICES).astype(np.float32)
+    x_flat = resampler.transform(x, interpolation="nearest")
+    x_ = resampler.inverse(x_flat)
+
+    # nb, even with nearest interpolation and restricting to vertices used in the
+    # forward mapping, the inverse is not perfect. Bc the nearest neighbor of your
+    # nearest neighbor is not always you.
+    #
+    #   .........x...x.........x
+    #   ..........y......y......
+    #
+    v = x[resampler.point_mask_][resampler._neigh_ind]
+    v_ = x_[resampler.point_mask_][resampler._neigh_ind]
+    assert np.mean(v == v_) > 0.97
+
+
+def test_get_cifti_surf_indices():
+    parc_path_surf = nisc.fetch_schaefer(400, space="fslr64k")
+    parc_path_cifti = nisc.fetch_schaefer_tian(400, 3, space="fslr91k")
+
+    parc_surf = nisc.read_cifti_surf_data(parc_path_surf).squeeze(0)
+    parc_cifti = nisc.read_cifti_data(parc_path_cifti).squeeze(0)
+    # nb subcortex at front of schaefer+tians3
+    parc_cifti = np.where(parc_cifti > 0, parc_cifti - 50, 0)
+
+    parc_cifti_img = nib.load(parc_path_cifti)
+    parc_surf_ids, parc_surf_mask = nisc.get_cifti_surf_indices(parc_cifti_img)
+    assert np.all(parc_surf[parc_surf_mask] == parc_cifti[parc_surf_ids])
