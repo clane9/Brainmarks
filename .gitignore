@@ -32,19 +32,11 @@ CLAUDE.md
 output
 wandb
 
-# freesurfer
-license.txt
-fsaverage
-
 # data
 data
 logs
-upload
-notebooks
 tmp
 slurms
-experiments/tuning_v1
-experiments/260115
 
 # HCP-YA
 hcpya_restricted.csv
