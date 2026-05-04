@@ -28,20 +28,6 @@ cd brainmarks
 uv sync --python 3.11
 ```
 
-## Datasets
-
-Benchmark datasets are distributed in Huggingface Arrow format hosted in the MedARC R2 bucket. To request access, fill out [this form](https://forms.gle/VGnakBFCBoNnUt2C7).
-
-Once you have credentials, configure them as environment variables:
-
-```bash
-export AWS_ACCESS_KEY_ID=...
-export AWS_SECRET_ACCESS_KEY=...
-export AWS_ENDPOINT_URL_S3=...   # Cloudflare R2 endpoint
-```
-
-Datasets are downloaded automatically on first use and saved in the Huggingface dataset cache.
-
 ## Usage
 
 Brainmarks has two main evaluation modes.
@@ -62,7 +48,7 @@ python -m brainmarks.main_logistic <model> <representation> <dataset>
 python -m brainmarks.main_logistic brainlm_vitmae_111m patch aabc_sex
 ```
 
-Pass `--help` to either command to see the full list of available models and datasets. Use `--config` to pass a YAML config file and `--overrides key=value` for per-run overrides.
+`representation` selects which embedding type the model exposes to the head: `cls`, `reg` (registers), or `patch`. Pass `--help` to either command to see the full list of available models and datasets. Use `--config` to pass a YAML config file and `--overrides key=value` for per-run overrides.
 
 ```bash
 # e.g.
@@ -77,6 +63,20 @@ python -m brainmarks.main_logistic \
 ```
 
 All available options are documented in the default configs: [default_probe.yaml](src/brainmarks/config/default_probe.yaml), [default_logistic.yaml](src/brainmarks/config/default_logistic.yaml).
+
+## Datasets
+
+Benchmark datasets are distributed in Huggingface Arrow format hosted in the MedARC R2 bucket. To request access, fill out [this form](https://forms.gle/VGnakBFCBoNnUt2C7).
+
+Once you have credentials, configure them as environment variables:
+
+```bash
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_ENDPOINT_URL_S3=...   # Cloudflare R2 endpoint
+```
+
+Datasets are downloaded automatically on first use and saved in the Huggingface dataset cache.
 
 ## Adding a model
 
